@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Logo from '../assets/Logo.jpg';
 
 // Icons with the same styling as CustomerDashboard
@@ -224,48 +225,194 @@ const useScreenSize = () => {
 // --- Main Admin Dashboard Component ---
 
 export default function AdminDashboard() {
-  // --- State Management ---
-  // TODO: Replace mock data with API/Firebase calls
-  const [users, setUsers] = useState([
-    { id: 'USR001', email: 'alice@example.com', role: 'Consumer', deviceIds: ['DEV001'], status: 'Active' },
-    { id: 'USR003', email: 'charlie@example.com', role: 'Consumer', deviceIds: [], status: 'Inactive' },
-  ]);
-  const [devices, setDevices] = useState([
-    { id: 'DEV001', location: '123 Oak St, Springfield', status: 'Online', user: 'USR001', lastSeen: '2025-10-04T10:30:00Z', firmware: 'v1.2.3' },
-    { id: 'DEV002', location: '456 Maple Ave, Shelbyville', status: 'Offline', user: 'USR002', lastSeen: '2025-10-03T18:45:12Z', firmware: 'v1.2.1' },
-    { id: 'DEV003', location: '789 Pine Ln, Capital City', status: 'Online', user: 'USR002', lastSeen: '2025-10-04T10:32:15Z', firmware: 'v1.2.3' },
-  ]);
-
+  const navigate = useNavigate();
+  const [users, setUsers] = useState([]);
+  const [loadingUsers, setLoadingUsers] = useState(true);
+  const [selectedConsumerId, setSelectedConsumerId] = useState(null);
+  const [consumerLiveData, setConsumerLiveData] = useState(null);
+  const [loadingConsumerLive, setLoadingConsumerLive] = useState(false);
+  const [consumerLiveError, setConsumerLiveError] = useState('');
+  const [meterActionLoading, setMeterActionLoading] = useState(false);
+  const [configLoading, setConfigLoading] = useState(false);
+  const [securityConfig, setSecurityConfig] = useState({
+    twoFactorRequired: false,
+    strictUserPermissions: true
+  });
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedDevice, setSelectedDevice] = useState(devices[0]);
   const [showConfirmation, setShowConfirmation] = useState(null); // { title, message, onConfirm }
   const [notification, setNotification] = useState(null); // { type, message }
 
+  const apiBase = (import.meta.env.VITE_API_BASE_URL
+    || (import.meta.env.DEV ? 'http://localhost:5000' : 'https://powerpulseproo-api.onrender.com'))
+    .replace(/\/$/, '');
+
+  const getAuthToken = () => localStorage.getItem('adminToken') || localStorage.getItem('token') || localStorage.getItem('authToken');
+
+  const authedFetch = async (url, options = {}) => {
+    const token = getAuthToken();
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options.headers || {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      }
+    });
+
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (_) {
+      payload = null;
+    }
+
+    if (!response.ok) {
+      const message = payload?.message || `Request failed (${response.status})`;
+      throw new Error(message);
+    }
+
+    return payload;
+  };
+
+  const fetchConsumers = async () => {
+    try {
+      setLoadingUsers(true);
+      const payload = await authedFetch(`${apiBase}/api/admin/consumers?limit=200`);
+      const consumers = payload?.data?.consumers || [];
+      setUsers(consumers);
+
+      if (!selectedConsumerId && consumers.length > 0) {
+        setSelectedConsumerId(consumers[0]._id);
+      }
+    } catch (error) {
+      showNotification('error', error.message || 'Failed to load consumers');
+    } finally {
+      setLoadingUsers(false);
+    }
+  };
+
+  const applyConfigToForm = (config) => {
+    const setValue = (id, value) => {
+      const node = document.getElementById(id);
+      if (!node) return;
+      if (node.type === 'checkbox') {
+        node.checked = Boolean(value);
+      } else if (value !== undefined && value !== null) {
+        node.value = value;
+      }
+    };
+
+    setValue('over-voltage', config?.thresholds?.overVoltage);
+    setValue('over-current', config?.thresholds?.overCurrent);
+    setValue('tamper-detection', config?.thresholds?.tamperDetection);
+    setValue('sample-interval', config?.sampling?.sampleIntervalSeconds);
+    setValue('report-interval', config?.sampling?.reportIntervalMinutes);
+    setValue('billing-rate', config?.sampling?.billingRate);
+    setValue('billing-fixed-charges', config?.billing?.fixedCharges);
+    setValue('billing-rate-per-unit', config?.billing?.ratePerUnit);
+    setValue('billing-duty-pct', config?.billing?.electricityDutyPct);
+    setValue('billing-fuel-rate', config?.billing?.fuelAdjustmentRate);
+    setValue('billing-other-charges', config?.billing?.otherCharges);
+    setValue('billing-due-days', config?.billing?.dueDays);
+
+    setSecurityConfig({
+      twoFactorRequired: Boolean(config?.security?.twoFactorRequired),
+      strictUserPermissions: config?.security?.strictUserPermissions !== false
+    });
+  };
+
+  const fetchSystemConfig = async () => {
+    try {
+      setConfigLoading(true);
+      const payload = await authedFetch(`${apiBase}/api/admin/config`);
+      const config = payload?.data?.config;
+      if (config) {
+        applyConfigToForm(config);
+      }
+    } catch (error) {
+      showNotification('error', error.message || 'Failed to load system config');
+    } finally {
+      setConfigLoading(false);
+    }
+  };
+
+  const saveConfigSection = async (section, payload) => {
+    await authedFetch(`${apiBase}/api/admin/config/${section}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    });
+  };
+
+  const fetchConsumerLiveData = async (consumerId, options = {}) => {
+    const { silent = false } = options;
+    if (!consumerId) return;
+
+    try {
+      if (!silent) {
+        setLoadingConsumerLive(true);
+      }
+      setConsumerLiveError('');
+      const payload = await authedFetch(`${apiBase}/api/admin/consumers/${consumerId}/live?limit=20`);
+      setConsumerLiveData(payload?.data || null);
+    } catch (error) {
+      setConsumerLiveError(error.message || 'Failed to load consumer live data');
+    } finally {
+      if (!silent) {
+        setLoadingConsumerLive(false);
+      }
+    }
+  };
+
   // Filtered data based on search
   const filteredUsers = users.filter(user =>
-    user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    user.id.toLowerCase().includes(searchTerm.toLowerCase())
+    (user.email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (user.consumerNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (user.name || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   // --- Effects ---
-  // Effect to fetch initial data
   useEffect(() => {
-    // TODO: Fetch users and devices from your backend
-    // E.g., fetch('/api/admin/users').then(res => res.json()).then(data => setUsers(data));
-    // E.g., fetch('/api/admin/devices').then(res => res.json()).then(data => setDevices(data));
+    fetchConsumers();
+    fetchSystemConfig();
   }, []);
 
+  useEffect(() => {
+    if (!selectedConsumerId) return;
+
+    fetchConsumerLiveData(selectedConsumerId);
+    const timer = setInterval(() => {
+      fetchConsumerLiveData(selectedConsumerId, { silent: true });
+    }, 10000);
+
+    return () => clearInterval(timer);
+  }, [selectedConsumerId]);
+
   // --- Handlers ---
-  const handleAction = (action, data) => {
+  const handlePowerToggle = (consumer) => {
+    const isCurrentlyOn = consumer?.status !== 'disconnected';
+    const nextState = isCurrentlyOn ? 'off' : 'on';
+
     setShowConfirmation({
-      title: `Confirm ${action}`,
-      message: `Are you sure you want to ${action.toLowerCase()} ${data.id}? This action cannot be undone.`,
-      onConfirm: () => {
-        console.log(`Performing ${action} on ${data.id}`);
-        // TODO: Call API to perform the action
-        showNotification('success', `${data.id} has been ${action.toLowerCase()}d successfully.`);
-        setShowConfirmation(null);
-      },
+      title: isCurrentlyOn ? 'Turn Meter OFF' : 'Turn Meter ON',
+      message: `Are you sure you want to turn ${nextState.toUpperCase()} meter for ${consumer.consumerNumber}?`,
+      onConfirm: async () => {
+        try {
+          setMeterActionLoading(true);
+          await authedFetch(`${apiBase}/api/admin/consumers/${consumer._id}/meter-power`, {
+            method: 'PATCH',
+            body: JSON.stringify({ powerState: nextState })
+          });
+
+          showNotification('success', `Meter turned ${nextState.toUpperCase()} for ${consumer.consumerNumber}`);
+          setShowConfirmation(null);
+          await fetchConsumers();
+          await fetchConsumerLiveData(consumer._id);
+        } catch (error) {
+          showNotification('error', error.message || 'Meter action failed');
+        } finally {
+          setMeterActionLoading(false);
+        }
+      }
     });
   };
   
@@ -273,14 +420,88 @@ export default function AdminDashboard() {
       setShowConfirmation({
       title: 'Confirm Save Settings',
       message: `Are you sure you want to apply the new ${section} settings?`,
-      onConfirm: () => {
-          console.log(`Saving ${section} settings...`);
-           // TODO: Call API to save settings
+      onConfirm: async () => {
+        try {
+          if (section === 'Threshold') {
+            await saveConfigSection('thresholds', {
+              overVoltage: Number(document.getElementById('over-voltage')?.value || 250),
+              overCurrent: Number(document.getElementById('over-current')?.value || 15),
+              tamperDetection: Boolean(document.getElementById('tamper-detection')?.checked)
+            });
+          } else if (section === 'Sampling') {
+            await saveConfigSection('sampling', {
+              sampleIntervalSeconds: Number(document.getElementById('sample-interval')?.value || 30),
+              reportIntervalMinutes: Number(document.getElementById('report-interval')?.value || 5),
+              billingRate: Number(document.getElementById('billing-rate')?.value || 0.12)
+            });
+          } else if (section === 'Billing') {
+            await saveConfigSection('billing', {
+              fixedCharges: Number(document.getElementById('billing-fixed-charges')?.value || 120),
+              ratePerUnit: Number(document.getElementById('billing-rate-per-unit')?.value || 6.5),
+              electricityDutyPct: Number(document.getElementById('billing-duty-pct')?.value || 5),
+              fuelAdjustmentRate: Number(document.getElementById('billing-fuel-rate')?.value || 0.25),
+              otherCharges: Number(document.getElementById('billing-other-charges')?.value || 25),
+              dueDays: Number(document.getElementById('billing-due-days')?.value || 15)
+            });
+          }
           showNotification('success', `${section} settings saved successfully!`);
           setShowConfirmation(null);
+        } catch (error) {
+          showNotification('error', error.message || `Failed to save ${section} settings`);
+          setShowConfirmation(null);
+        }
       },
     });
   }
+
+  const handleUtilityAction = (title, message, action) => {
+    setShowConfirmation({
+      title,
+      message,
+      onConfirm: async () => {
+        try {
+          if (action === 'toggle-2fa') {
+            const next = !securityConfig.twoFactorRequired;
+            await saveConfigSection('security', {
+              twoFactorRequired: next,
+              strictUserPermissions: securityConfig.strictUserPermissions
+            });
+            setSecurityConfig((prev) => ({ ...prev, twoFactorRequired: next }));
+          } else if (action === 'toggle-permissions') {
+            const next = !securityConfig.strictUserPermissions;
+            await saveConfigSection('security', {
+              twoFactorRequired: securityConfig.twoFactorRequired,
+              strictUserPermissions: next
+            });
+            setSecurityConfig((prev) => ({ ...prev, strictUserPermissions: next }));
+          } else if (action === 'firmware-update') {
+            await authedFetch(`${apiBase}/api/admin/operations/schedule`, {
+              method: 'POST',
+              body: JSON.stringify({ type: 'firmware-update' })
+            });
+          } else if (action === 'maintenance') {
+            await authedFetch(`${apiBase}/api/admin/operations/schedule`, {
+              method: 'POST',
+              body: JSON.stringify({ type: 'maintenance' })
+            });
+          } else if (action === 'import-readings') {
+            await authedFetch(`${apiBase}/api/admin/operations/import-readings`, {
+              method: 'POST',
+              body: JSON.stringify({
+                consumerId: selectedConsumerId || undefined,
+                limit: 10000
+              })
+            });
+          }
+          showNotification('success', `${title} completed successfully.`);
+          setShowConfirmation(null);
+        } catch (error) {
+          showNotification('error', error.message || `${title} failed`);
+          setShowConfirmation(null);
+        }
+      }
+    });
+  };
 
   const showNotification = (type, message) => {
       setNotification({ type, message });
@@ -363,27 +584,45 @@ export default function AdminDashboard() {
                 <thead style={responsiveStyles.tableHeader}>
                   <tr>
                     <th style={responsiveStyles.tableHeaderCell}>Consumer ID</th>
+                    <th style={responsiveStyles.tableHeaderCell}>Name</th>
                     <th style={responsiveStyles.tableHeaderCell}>Email</th>
-                    <th style={responsiveStyles.tableHeaderCell}>Role</th>
+                    <th style={responsiveStyles.tableHeaderCell}>Meter ID</th>
                     <th style={responsiveStyles.tableHeaderCell}>Status</th>
                     <th style={responsiveStyles.tableHeaderCell}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredUsers.map(user => (
-                    <tr key={user.id}>
-                      <td style={responsiveStyles.tableCell}>{user.id}</td>
+                  {loadingUsers ? (
+                    <tr>
+                      <td colSpan={6} style={responsiveStyles.tableCell}>Loading consumers...</td>
+                    </tr>
+                  ) : filteredUsers.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} style={responsiveStyles.tableCell}>No consumers found.</td>
+                    </tr>
+                  ) : filteredUsers.map(user => (
+                    <tr
+                      key={user._id}
+                      style={{
+                        backgroundColor: selectedConsumerId === user._id ? '#fff7ed' : 'transparent',
+                        cursor: 'pointer'
+                      }}
+                      onClick={() => setSelectedConsumerId(user._id)}
+                    >
+                      <td style={responsiveStyles.tableCell}>{user.consumerNumber}</td>
+                      <td style={responsiveStyles.tableCell}>{user.name}</td>
                       <td style={responsiveStyles.tableCell}>{user.email}</td>
-                      <td style={responsiveStyles.tableCell}>{user.role}</td>
-                      <td style={responsiveStyles.tableCell}>{renderStatusBadge(user.status)}</td>
+                      <td style={responsiveStyles.tableCell}>{user?.meterDetails?.meterId || '-'}</td>
+                      <td style={responsiveStyles.tableCell}>{renderStatusBadge((user.status || '').charAt(0).toUpperCase() + (user.status || '').slice(1))}</td>
                       <td style={responsiveStyles.tableCell}>
-                        <button 
-                          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0.25rem' }}
-                          aria-label={`Edit user ${user.id}`}
-                          onMouseOver={(e) => e.target.style.opacity = '0.7'}
-                          onMouseOut={(e) => e.target.style.opacity = '1'}
+                        <button
+                          style={responsiveStyles.button}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedConsumerId(user._id);
+                          }}
                         >
-                          <EditIcon />
+                          View Live
                         </button>
                       </td>
                     </tr>
@@ -394,75 +633,123 @@ export default function AdminDashboard() {
           </div>
         </section>
 
-        {/* Device Management */}
+        {/* Selected Consumer Live Data */}
         <section style={responsiveStyles.section}>
-          <h2 style={responsiveStyles.sectionTitle}>Device Management</h2>
+          <h2 style={responsiveStyles.sectionTitle}>Selected Consumer Live Data</h2>
           <div style={responsiveStyles.card}>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={responsiveStyles.table}>
-                <thead style={responsiveStyles.tableHeader}>
-                  <tr>
-                    <th style={responsiveStyles.tableHeaderCell}>Device ID</th>
-                    <th style={responsiveStyles.tableHeaderCell}>Location</th>
-                    <th style={responsiveStyles.tableHeaderCell}>Status</th>
-                    <th style={responsiveStyles.tableHeaderCell}>Last Seen</th>
-                    <th style={responsiveStyles.tableHeaderCell}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {devices.map(device => (
-                    <tr 
-                      key={device.id} 
-                      style={{ cursor: 'pointer', transition: 'background-color 0.3s ease' }}
-                      onClick={() => setSelectedDevice(device)}
-                      onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f9fafb'}
-                      onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                    >
-                      <td style={responsiveStyles.tableCell}>{device.id}</td>
-                      <td style={responsiveStyles.tableCell}>{device.location}</td>
-                      <td style={responsiveStyles.tableCell}>{renderStatusBadge(device.status)}</td>
-                      <td style={responsiveStyles.tableCell}>{new Date(device.lastSeen).toLocaleString()}</td>
-                      <td style={responsiveStyles.tableCell}>
-                        <div style={{ display: 'flex', gap: '0.5rem' }}>
-                          <button 
-                            onClick={(e) => {e.stopPropagation(); handleAction('Reboot', device)}}
-                            style={{
-                              background: 'none',
-                              border: 'none',
-                              color: '#f59e0b',
-                              fontSize: isMobile ? '0.75rem' : '0.8rem',
-                              cursor: 'pointer',
-                              fontWeight: '600',
-                              transition: 'color 0.3s ease'
-                            }}
-                            onMouseOver={(e) => e.target.style.color = '#d97706'}
-                            onMouseOut={(e) => e.target.style.color = '#f59e0b'}
-                          >
-                            Reboot
-                          </button>
-                          <button 
-                            onClick={(e) => {e.stopPropagation(); handleAction('Reset', device)}}
-                            style={{
-                              background: 'none',
-                              border: 'none',
-                              color: '#ef4444',
-                              fontSize: isMobile ? '0.75rem' : '0.8rem',
-                              cursor: 'pointer',
-                              fontWeight: '600',
-                              transition: 'color 0.3s ease'
-                            }}
-                            onMouseOver={(e) => e.target.style.color = '#dc2626'}
-                            onMouseOut={(e) => e.target.style.color = '#ef4444'}
-                          >
-                            Reset
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {!selectedConsumerId ? (
+              <p style={{ margin: 0, color: '#64748b' }}>Select a consumer to view live data.</p>
+            ) : loadingConsumerLive ? (
+              <p style={{ margin: 0, color: '#64748b' }}>Loading consumer live data...</p>
+            ) : consumerLiveError ? (
+              <p style={{ margin: 0, color: '#dc2626' }}>{consumerLiveError}</p>
+            ) : consumerLiveData?.consumer ? (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1rem' }}>
+                  <div>
+                    <h3 style={{ margin: 0, color: '#111827', fontSize: isMobile ? '1rem' : '1.1rem' }}>
+                      {consumerLiveData.consumer.name} ({consumerLiveData.consumer.consumerNumber})
+                    </h3>
+                    <p style={{ margin: '0.25rem 0 0 0', color: '#64748b', fontSize: isMobile ? '0.75rem' : '0.85rem' }}>
+                      Meter: {consumerLiveData.consumer?.meterDetails?.meterId || '-'} | Status: {consumerLiveData.consumer.status}
+                    </p>
+                  </div>
+                  <button
+                    style={{ ...responsiveStyles.button, backgroundColor: '#0891b2' }}
+                    onClick={() => navigate(`/admin/consumer/${consumerLiveData.consumer._id}/dashboard`)}
+                  >
+                    Open Full Dashboard
+                  </button>
+                  <button
+                    style={{
+                      ...responsiveStyles.button,
+                      backgroundColor: consumerLiveData.consumer.status === 'disconnected' ? '#10b981' : '#ef4444',
+                      opacity: meterActionLoading ? 0.7 : 1,
+                      cursor: meterActionLoading ? 'not-allowed' : 'pointer'
+                    }}
+                    disabled={meterActionLoading}
+                    onClick={() => handlePowerToggle(consumerLiveData.consumer)}
+                  >
+                    <PowerIcon />
+                    {consumerLiveData.consumer.status === 'disconnected' ? 'Turn Meter ON' : 'Turn Meter OFF'}
+                  </button>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
+                  <div style={{ border: '1px solid #e5e7eb', borderRadius: '0.75rem', padding: '0.85rem' }}>
+                    <h4 style={{ margin: '0 0 0.5rem 0', color: '#111827' }}>Latest Reading</h4>
+                    {consumerLiveData.latestReading ? (
+                      <div style={{ fontSize: isMobile ? '0.8rem' : '0.875rem', color: '#374151', lineHeight: 1.6 }}>
+                        <div>Current Reading: {consumerLiveData.latestReading?.reading?.currentReading ?? '-'}</div>
+                        <div>Units Consumed: {consumerLiveData.latestReading?.reading?.unitsConsumed ?? '-'}</div>
+                        <div>Voltage: {consumerLiveData.latestReading?.powerQuality?.voltage ?? '-'} V</div>
+                        <div>Current: {consumerLiveData.latestReading?.powerQuality?.current ?? '-'} A</div>
+                        <div>Frequency: {consumerLiveData.latestReading?.powerQuality?.frequency ?? '-'} Hz</div>
+                        <div>Power Factor: {consumerLiveData.latestReading?.powerQuality?.powerFactor ?? '-'}</div>
+                        <div>Timestamp: {new Date(consumerLiveData.latestReading.timestamp).toLocaleString()}</div>
+                      </div>
+                    ) : (
+                      <p style={{ margin: 0, color: '#64748b' }}>No reading found.</p>
+                    )}
+                  </div>
+
+                  <div style={{ border: '1px solid #e5e7eb', borderRadius: '0.75rem', padding: '0.85rem' }}>
+                    <h4 style={{ margin: '0 0 0.5rem 0', color: '#111827' }}>Recent Alerts</h4>
+                    <div style={{ maxHeight: '210px', overflowY: 'auto', fontSize: isMobile ? '0.75rem' : '0.825rem' }}>
+                      {(consumerLiveData.recentEvents || []).length === 0 ? (
+                        <p style={{ margin: 0, color: '#64748b' }}>No alerts found.</p>
+                      ) : (
+                        (consumerLiveData.recentEvents || []).map((event) => (
+                          <div key={event._id} style={{ padding: '0.45rem 0', borderBottom: '1px solid #f1f5f9' }}>
+                            <div style={{ fontWeight: 600, color: '#111827' }}>{event.type} - {event.severity}</div>
+                            <div style={{ color: '#475569' }}>{event.detail}</div>
+                            <div style={{ color: '#94a3b8' }}>{new Date(event.occurredAt || event.createdAt).toLocaleString()}</div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 style={{ margin: '0 0 0.5rem 0', color: '#111827' }}>Recent Meter Readings</h4>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={responsiveStyles.table}>
+                      <thead style={responsiveStyles.tableHeader}>
+                        <tr>
+                          <th style={responsiveStyles.tableHeaderCell}>Time</th>
+                          <th style={responsiveStyles.tableHeaderCell}>Current Reading</th>
+                          <th style={responsiveStyles.tableHeaderCell}>Units</th>
+                          <th style={responsiveStyles.tableHeaderCell}>Voltage</th>
+                          <th style={responsiveStyles.tableHeaderCell}>Current</th>
+                          <th style={responsiveStyles.tableHeaderCell}>PF</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(consumerLiveData.recentReadings || []).length === 0 ? (
+                          <tr>
+                            <td colSpan={6} style={responsiveStyles.tableCell}>No recent readings found.</td>
+                          </tr>
+                        ) : (
+                          (consumerLiveData.recentReadings || []).map((reading) => (
+                            <tr key={reading._id}>
+                              <td style={responsiveStyles.tableCell}>{new Date(reading.timestamp).toLocaleString()}</td>
+                              <td style={responsiveStyles.tableCell}>{reading?.reading?.currentReading ?? '-'}</td>
+                              <td style={responsiveStyles.tableCell}>{reading?.reading?.unitsConsumed ?? '-'}</td>
+                              <td style={responsiveStyles.tableCell}>{reading?.powerQuality?.voltage ?? '-'}</td>
+                              <td style={responsiveStyles.tableCell}>{reading?.powerQuality?.current ?? '-'}</td>
+                              <td style={responsiveStyles.tableCell}>{reading?.powerQuality?.powerFactor ?? '-'}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <p style={{ margin: 0, color: '#64748b' }}>No data available.</p>
+            )}
           </div>
         </section>
 
@@ -615,13 +902,154 @@ export default function AdminDashboard() {
               </div>
             </div>
 
+            {/* Billing Configuration */}
+            <div style={responsiveStyles.card}>
+              <h3 style={{ fontSize: isMobile ? '1.1rem' : '1.25rem', fontWeight: 'bold', color: '#111827', marginBottom: '1rem' }}>Billing Configuration</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', alignItems: 'center' }}>
+                  <label htmlFor="billing-fixed-charges" style={{ color: '#64748b', fontSize: isMobile ? '0.8rem' : '0.875rem' }}>Fixed Charges (Rs)</label>
+                  <input
+                    id="billing-fixed-charges"
+                    type="number"
+                    step="0.01"
+                    defaultValue="120"
+                    style={{
+                      padding: '0.5rem',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '0.375rem',
+                      fontSize: isMobile ? '0.8rem' : '0.875rem',
+                      outline: 'none',
+                      transition: 'all 0.3s ease'
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = '#ea580c'}
+                    onBlur={(e) => e.target.style.borderColor = '#d1d5db'}
+                  />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', alignItems: 'center' }}>
+                  <label htmlFor="billing-rate-per-unit" style={{ color: '#64748b', fontSize: isMobile ? '0.8rem' : '0.875rem' }}>Rate Per Unit (Rs)</label>
+                  <input
+                    id="billing-rate-per-unit"
+                    type="number"
+                    step="0.01"
+                    defaultValue="6.5"
+                    style={{
+                      padding: '0.5rem',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '0.375rem',
+                      fontSize: isMobile ? '0.8rem' : '0.875rem',
+                      outline: 'none',
+                      transition: 'all 0.3s ease'
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = '#ea580c'}
+                    onBlur={(e) => e.target.style.borderColor = '#d1d5db'}
+                  />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', alignItems: 'center' }}>
+                  <label htmlFor="billing-duty-pct" style={{ color: '#64748b', fontSize: isMobile ? '0.8rem' : '0.875rem' }}>Electricity Duty (%)</label>
+                  <input
+                    id="billing-duty-pct"
+                    type="number"
+                    step="0.01"
+                    defaultValue="5"
+                    style={{
+                      padding: '0.5rem',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '0.375rem',
+                      fontSize: isMobile ? '0.8rem' : '0.875rem',
+                      outline: 'none',
+                      transition: 'all 0.3s ease'
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = '#ea580c'}
+                    onBlur={(e) => e.target.style.borderColor = '#d1d5db'}
+                  />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', alignItems: 'center' }}>
+                  <label htmlFor="billing-fuel-rate" style={{ color: '#64748b', fontSize: isMobile ? '0.8rem' : '0.875rem' }}>Fuel Adjustment (Rs/unit)</label>
+                  <input
+                    id="billing-fuel-rate"
+                    type="number"
+                    step="0.01"
+                    defaultValue="0.25"
+                    style={{
+                      padding: '0.5rem',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '0.375rem',
+                      fontSize: isMobile ? '0.8rem' : '0.875rem',
+                      outline: 'none',
+                      transition: 'all 0.3s ease'
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = '#ea580c'}
+                    onBlur={(e) => e.target.style.borderColor = '#d1d5db'}
+                  />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', alignItems: 'center' }}>
+                  <label htmlFor="billing-other-charges" style={{ color: '#64748b', fontSize: isMobile ? '0.8rem' : '0.875rem' }}>Other Charges (Rs)</label>
+                  <input
+                    id="billing-other-charges"
+                    type="number"
+                    step="0.01"
+                    defaultValue="25"
+                    style={{
+                      padding: '0.5rem',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '0.375rem',
+                      fontSize: isMobile ? '0.8rem' : '0.875rem',
+                      outline: 'none',
+                      transition: 'all 0.3s ease'
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = '#ea580c'}
+                    onBlur={(e) => e.target.style.borderColor = '#d1d5db'}
+                  />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', alignItems: 'center' }}>
+                  <label htmlFor="billing-due-days" style={{ color: '#64748b', fontSize: isMobile ? '0.8rem' : '0.875rem' }}>Due Days After Month End</label>
+                  <input
+                    id="billing-due-days"
+                    type="number"
+                    defaultValue="15"
+                    style={{
+                      padding: '0.5rem',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '0.375rem',
+                      fontSize: isMobile ? '0.8rem' : '0.875rem',
+                      outline: 'none',
+                      transition: 'all 0.3s ease'
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = '#ea580c'}
+                    onBlur={(e) => e.target.style.borderColor = '#d1d5db'}
+                  />
+                </div>
+                <button
+                  onClick={() => handleSaveSettings('Billing')}
+                  style={{
+                    ...responsiveStyles.button,
+                    width: '100%',
+                    marginTop: '0.5rem'
+                  }}
+                  onMouseOver={(e) => {
+                    e.target.style.backgroundColor = '#dc2626';
+                    e.target.style.transform = 'translateY(-2px)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.target.style.backgroundColor = '#ea580c';
+                    e.target.style.transform = 'translateY(0)';
+                  }}
+                >
+                  Save Billing Configuration
+                </button>
+              </div>
+            </div>
+
             {/* Security & System */}
             <div style={responsiveStyles.card}>
               <h3 style={{ fontSize: isMobile ? '1.1rem' : '1.25rem', fontWeight: 'bold', color: '#111827', marginBottom: '1rem' }}>Security & System</h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#64748b', fontSize: isMobile ? '0.8rem' : '0.875rem' }}>Two-Factor Auth (2FA)</span>
+                  <span style={{ color: '#64748b', fontSize: isMobile ? '0.8rem' : '0.875rem' }}>
+                    Two-Factor Auth (2FA): {securityConfig.twoFactorRequired ? 'Required' : 'Optional'}
+                  </span>
                   <button 
+                    onClick={() => handleUtilityAction('2FA Setup', 'Apply or update two-factor authentication policy?', 'toggle-2fa')}
                     style={{
                       padding: '0.375rem 0.75rem',
                       backgroundColor: '#f1f5f9',
@@ -639,8 +1067,11 @@ export default function AdminDashboard() {
                   </button>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#64748b', fontSize: isMobile ? '0.8rem' : '0.875rem' }}>User Permissions</span>
+                  <span style={{ color: '#64748b', fontSize: isMobile ? '0.8rem' : '0.875rem' }}>
+                    User Permissions: {securityConfig.strictUserPermissions ? 'Strict' : 'Relaxed'}
+                  </span>
                   <button 
+                    onClick={() => handleUtilityAction('Permission Policy Update', 'Apply updated user permission policies?', 'toggle-permissions')}
                     style={{
                       padding: '0.375rem 0.75rem',
                       backgroundColor: '#f1f5f9',
@@ -659,6 +1090,26 @@ export default function AdminDashboard() {
                 </div>
                 <hr style={{ border: 'none', borderTop: '1px solid #e5e7eb', margin: '0.5rem 0' }} />
                 <button 
+                  onClick={() => handleUtilityAction('Historical Data Import', 'Import readings from Firebase into MongoDB for billing history?', 'import-readings')}
+                  style={{
+                    ...responsiveStyles.button,
+                    width: '100%',
+                    backgroundColor: '#0ea5e9',
+                    boxShadow: '0 4px 12px rgba(14, 165, 233, 0.3)'
+                  }}
+                  onMouseOver={(e) => {
+                    e.target.style.backgroundColor = '#0284c7';
+                    e.target.style.transform = 'translateY(-2px)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.target.style.backgroundColor = '#0ea5e9';
+                    e.target.style.transform = 'translateY(0)';
+                  }}
+                >
+                  Import Historical Readings
+                </button>
+                <button 
+                  onClick={() => handleUtilityAction('Firmware Update Scheduling', 'Schedule firmware update for selected devices?', 'firmware-update')}
                   style={{
                     ...responsiveStyles.button,
                     width: '100%',
@@ -676,6 +1127,7 @@ export default function AdminDashboard() {
                   Schedule Firmware Update
                 </button>
                 <button 
+                  onClick={() => handleUtilityAction('Maintenance Scheduling', 'Schedule maintenance window for selected devices?', 'maintenance')}
                   style={{
                     ...responsiveStyles.button,
                     width: '100%',

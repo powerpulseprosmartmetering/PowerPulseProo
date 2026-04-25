@@ -83,11 +83,6 @@ const consumerSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Index for faster queries
-consumerSchema.index({ consumerNumber: 1 });
-consumerSchema.index({ email: 1 });
-consumerSchema.index({ 'meterDetails.meterId': 1 });
-
 // Hash password before saving
 consumerSchema.pre('save', async function(next) {
   if (!this.isModified('password')) return next();

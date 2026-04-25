@@ -81,9 +81,6 @@ const adminSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Index for faster queries
-adminSchema.index({ adminId: 1 });
-adminSchema.index({ email: 1 });
 adminSchema.index({ role: 1 });
 
 // Hash password before saving

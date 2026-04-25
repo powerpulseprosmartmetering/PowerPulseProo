@@ -1,15 +1,42 @@
 // BillsPage.jsx — PowerPulsePro Monthly Billing & Reports
-// Self-contained, Tailwind-style inline CSS, Firebase Firestore integration
+// Self-contained, Tailwind-style inline CSS, backend billing API integration
 import React, { useState, useMemo, useRef, useEffect } from "react";
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, query, onSnapshot } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 
-// --- Global Configs & Firebase Setup ---
-// These variables are provided by the canvas environment
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+const apiBase = (import.meta.env.VITE_API_BASE_URL
+  || (import.meta.env.DEV ? 'http://localhost:5000' : 'https://powerpulseproo-api.onrender.com'))
+  .replace(/\/$/, '');
+
+function getAuthToken() {
+  const decodeJwtPayload = (token) => {
+    try {
+      if (!token || typeof token !== 'string') return null;
+      const part = token.split('.')[1];
+      if (!part) return null;
+      const normalized = part.replace(/-/g, '+').replace(/_/g, '/');
+      const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+      const json = atob(padded);
+      return JSON.parse(json);
+    } catch {
+      return null;
+    }
+  };
+
+  const candidates = [
+    localStorage.getItem('consumerToken'),
+    localStorage.getItem('token'),
+    localStorage.getItem('authToken')
+  ].filter(Boolean);
+
+  for (const token of candidates) {
+    const payload = decodeJwtPayload(token);
+    if (payload?.type === 'consumer') {
+      return token;
+    }
+  }
+
+  return null;
+}
 
 // --- Mock Data & Configs (Daily usage data for the currently selected month) ---
 const deviceId = "PPPRO-001";
@@ -38,67 +65,51 @@ const tariff = {
   ],
 };
 
-// --- MSEDCL Replication Specific Mock Data (for bill-style layout) ---
-// These values mirror the earlier replication screenshot; they are separate from the slab/analytics logic above.
-const MSEDCL_TARIFF = {
-  fixedCharge: 130.00,
-  wheelingRate: 1.47,
-  facRate: 0.20,
-  unitRate: 4.28,
-  electricityDutyPct: 16,
-  taxOnSalePct: 0,
-  promptDiscountRate: 0.0025,
-  maxDiscount: 500,
-  lateFee: 10.00,
-  mockArrears: 2.78,
-  mockAdjustments: -0.64,
-};
+function formatDateLabel(value) {
+  if (!value) return 'N/A';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'N/A';
+  return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase();
+}
 
-const MSEDCL_MOCK_INFO = {
-  consumerName: "ADITYA BHONGALE",
-  consumerAddress: "M.No. 1283, AT SAMARTHNAGAR POST BHAWANINAGAR, TA INDAPUR PUNE 413104",
-  supplyDate: "14-Mar-2021",
-  sanctLoad: "0.8 KW",
-  billDate: "15-SEP-25",
-  dueDate: "06-OCT-25",
-  payBeforeDiscountDate: "24-SEP-25",
-  readingDateCurrent: "12-SEP-25",
-  readingDatePrevious: "11-AUG-25",
-  currentReading: 1620,
-  previousReading: 1587,
-  mf: 1,
-  billPeriod: "1.07 Month(s)",
-  billNo: "000003032686419",
-  hsnCode: "27160000",
-  consumerNo: "178010118879",
-  tariffCategory: "090/LT I Res 1-Phase"
-};
+function formatAddress(address) {
+  if (!address) return 'N/A';
+  const parts = [address.street, address.city, address.state, address.pincode].filter(Boolean);
+  return parts.length ? parts.join(', ') : 'N/A';
+}
 
-function computeMSEDCLBill(kWh, tariff) {
-  const energyCharge = kWh * tariff.unitRate;
-  const wheelingCharge = kWh * tariff.wheelingRate;
-  const facCharge = kWh * tariff.facRate;
-  const fixedCharge = tariff.fixedCharge;
-  const baseForDuty = fixedCharge + energyCharge;
-  const electricityDuty = (baseForDuty * tariff.electricityDutyPct) / 100;
-  const taxOnSale = 0.0;
-  const totalCurrentBill = fixedCharge + energyCharge + wheelingCharge + facCharge + electricityDuty + taxOnSale;
-  const netArrears = tariff.mockArrears;
-  const adjustments = tariff.mockAdjustments;
-  const totalArrears = netArrears + adjustments;
-  const netBillAmount = totalCurrentBill + totalArrears;
-  const roundedBill = Math.round(netBillAmount);
-  const discount = totalCurrentBill * tariff.promptDiscountRate;
-  const discountAmount = Math.min(discount, tariff.maxDiscount);
-  const promptAmount = roundedBill - discountAmount;
-  const dueAfterDate = roundedBill + tariff.lateFee;
-  const dueOnDate = roundedBill;
-  return { fixedCharge, energyCharge, wheelingCharge, facCharge, electricityDuty, taxOnSale, totalCurrentBill, netArrears, adjustments, totalArrears, netBillAmount, roundedBill, discountAmount, promptAmount, dueOnDate, dueAfterDate };
+function addDays(value, days) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setDate(date.getDate() + days);
+  return date;
+}
+
+function monthRangeLabel(monthValue) {
+  if (!monthValue || !/^\d{4}-\d{2}$/.test(monthValue)) return 'N/A';
+  const [year, month] = monthValue.split('-').map(Number);
+  const start = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0));
+  const end = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+  return `${formatDateLabel(start)} - ${formatDateLabel(end)}`;
+}
+
+function sumCharges(tariffDetails) {
+  const slabCharges = (tariffDetails?.slabRates || []).reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  const fixedCharges = Number(tariffDetails?.fixedCharges) || 0;
+  const electricityDuty = Number(tariffDetails?.taxes?.electricityDuty) || 0;
+  const fuelAdjustment = Number(tariffDetails?.taxes?.fuelAdjustment) || 0;
+  const otherCharges = Number(tariffDetails?.taxes?.otherCharges) || 0;
+  const totalAmount = slabCharges + fixedCharges + electricityDuty + fuelAdjustment + otherCharges;
+
+  return { slabCharges, fixedCharges, electricityDuty, fuelAdjustment, otherCharges, totalAmount };
 }
 
 // --- Helpers & Utilities ---
 function formatCurrencyINR(val) {
-  return `₹${val.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+  const num = Number(val);
+  const safeValue = Number.isFinite(num) ? num : 0;
+  return `₹${safeValue.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 }
 
 function applySlabs(kWh, slabs) {
@@ -146,11 +157,6 @@ function exportPDF(name, data) {
   window.print();
 }
 
-// Helper to get the Firestore path for the current user's private collection
-function getUserCollectionPath(userId) {
-  return `artifacts/${appId}/users/${userId}/billing_history`;
-}
-
 // --- Main Component ---
 // Inline style constants used in bill & history tables (previously missing -> caused ReferenceError)
 const tableH = { padding: '4px 6px', border: '1px solid #000', textAlign: 'center', fontWeight: 'bold' };
@@ -159,22 +165,28 @@ const billTDL = { padding: '3px 6px', borderBottom: '1px dotted #555', textAlign
 const billTDR = { padding: '3px 6px', borderBottom: '1px dotted #555', textAlign: 'right', minWidth: '90px', fontVariantNumeric: 'tabular-nums' };
 
 export default function BillsPage() {
-    const navigate = useNavigate();
-  // --- Firebase State ---
-  const [db, setDb] = useState(null);
-  const [auth, setAuth] = useState(null);
-  const [userId, setUserId] = useState(null);
-  const [isAuthReady, setIsAuthReady] = useState(false);
-
   // --- App State ---
-  const [selectedMonth, setSelectedMonth] = useState(currentMonth);
+  const navigate = useNavigate();
+  const [consumerProfile, setConsumerProfile] = useState(null);
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    try {
+      const savedMonth = localStorage.getItem('billingSelectedMonth');
+      return savedMonth && /^\d{4}-\d{2}$/.test(savedMonth) ? savedMonth : currentMonth;
+    } catch {
+      return currentMonth;
+    }
+  });
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState(null);
   const [billingHistory, setBillingHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyMessage, setHistoryMessage] = useState('');
+  const hasAutoSelectedMonthRef = useRef(false);
 
-  // --- Style Injection and Firebase Initialization ---
+  const dataReady = !loading && !historyLoading;
+
+  // --- Style Injection ---
   useEffect(() => {
-    // Inject styles from DetailedCharts.jsx for the modern header/footer look
     if (!document.getElementById('detailed-charts-styles')) {
       const styleTag = document.createElement('style');
       styleTag.id = 'detailed-charts-styles';
@@ -182,67 +194,208 @@ export default function BillsPage() {
       document.head.appendChild(styleTag);
     }
 
-    if (!firebaseConfig) {
-      console.error("Firebase config is missing.");
-      return;
-    }
-    try {
-      const app = initializeApp(firebaseConfig);
-      const authInstance = getAuth(app);
-      const dbInstance = getFirestore(app);
-      setAuth(authInstance);
-      setDb(dbInstance);
-
-      const unsubscribeAuth = onAuthStateChanged(authInstance, async (user) => {
-        if (!user) {
-          // Sign in anonymously if no user is found
-          if (typeof __initial_auth_token !== 'undefined') {
-            await signInWithCustomToken(authInstance, __initial_auth_token);
-          } else {
-            await signInAnonymously(authInstance);
-          }
-        }
-        // User (authenticated or anonymous) is now available
-        setUserId(authInstance.currentUser?.uid || crypto.randomUUID());
-        setIsAuthReady(true);
-      });
-
-      return () => {
-        unsubscribeAuth();
-        // Optional cleanup of the style tag if component unmounts
-        const tag = document.getElementById('detailed-charts-styles');
-        if (tag) tag.remove();
-      };
-    } catch (error) {
-      console.error("Firebase initialization failed:", error);
-    }
+    return () => {
+      const tag = document.getElementById('detailed-charts-styles');
+      if (tag) tag.remove();
+    };
   }, []);
 
-  // --- Real-time Firestore Listener for Billing History ---
   useEffect(() => {
-    if (!db || !isAuthReady || !userId) return;
+    const token = getAuthToken();
+    if (!token) {
+      setHistoryLoading(false);
+      setHistoryMessage('Please sign in to view billing history.');
+      setBillingHistory([]);
+      return;
+    }
 
-    const collectionPath = getUserCollectionPath(userId);
-    const q = query(collection(db, collectionPath));
-    // Note: We avoid orderBy here to prevent index missing errors, and sort locally.
+    let isMounted = true;
 
-    const unsubscribeSnapshot = onSnapshot(q, (snapshot) => {
-      const history = [];
-      snapshot.forEach((doc) => {
-        history.push({ id: doc.id, ...doc.data() });
-      });
-      // Sort locally by month descending (assuming month is in 'YYYY-MM' format)
-      history.sort((a, b) => b.month.localeCompare(a.month));
+    try {
+      localStorage.setItem('billingSelectedMonth', selectedMonth);
+    } catch {}
 
-      setBillingHistory(history);
-      console.log(`Fetched ${history.length} billing records from Firestore.`);
-    }, (error) => {
-      console.error("Error fetching billing history:", error);
-      setToast({ type: "error", msg: "Failed to load billing history." });
-    });
+    const loadBillingHistory = async (options = {}) => {
+      const { silent = false } = options;
+      if (!silent) {
+        setHistoryLoading(true);
+      }
+      setHistoryMessage('');
 
-    return () => unsubscribeSnapshot();
-  }, [db, isAuthReady, userId]); // Re-run when DB is ready or user changes
+      try {
+        const [profileResponse, historyResponse] = await Promise.all([
+          fetch(`${apiBase}/api/consumer/profile`, {
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+              'Cache-Control': 'no-cache'
+            }
+          }),
+          fetch(`${apiBase}/api/consumer/billing/history?limit=12&month=${encodeURIComponent(selectedMonth)}`, {
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+              'Cache-Control': 'no-cache'
+            }
+          })
+        ]);
+
+        const [profilePayload, historyPayload] = await Promise.all([
+          profileResponse.json(),
+          historyResponse.json()
+        ]);
+
+        if (profileResponse.ok && profilePayload?.status === 'success') {
+          const freshProfile = profilePayload?.data?.consumer || null;
+          if (freshProfile && isMounted) {
+            setConsumerProfile(freshProfile);
+            localStorage.setItem('consumerProfile', JSON.stringify(freshProfile));
+            localStorage.setItem('user', JSON.stringify(freshProfile));
+          }
+        }
+
+        if (!historyResponse.ok || historyPayload?.status !== 'success') {
+          throw new Error(historyPayload?.message || 'Failed to load billing history');
+        }
+
+        const history = (historyPayload?.data?.bills || []).map((bill) => ({
+          id: bill._id || bill.id || bill.readingPeriod?.billingCycle,
+          month: bill.readingPeriod?.billingCycle || (bill.readingPeriod?.startDate ? new Date(bill.readingPeriod.startDate).toISOString().slice(0, 7) : 'N/A'),
+          billDate: bill.createdAt || bill.timestamp || bill.readingPeriod?.endDate || null,
+          dueDate: addDays(bill.readingPeriod?.endDate || bill.createdAt || bill.timestamp, 15),
+          readingPeriod: bill.readingPeriod || null,
+          reading: bill.reading || null,
+          tariffDetails: bill.tariffDetails || null,
+          billAmount: bill.billAmount || sumCharges(bill.tariffDetails),
+          amount: Number(bill?.billAmount?.totalAmount ?? sumCharges(bill.tariffDetails).totalAmount ?? 0),
+          status: bill.status === 'processed' ? 'Paid' : bill.status === 'disputed' ? 'Disputed' : bill.status === 'corrected' ? 'Corrected' : 'Pending',
+          raw: bill
+        }));
+
+        if (!isMounted) return;
+
+        history.sort((a, b) => b.month.localeCompare(a.month));
+        setBillingHistory(history);
+
+        const selectedBill = history.find((item) => item.month === selectedMonth) || null;
+        const latestRealBill = history.find((bill) => !bill?.synthetic && bill?.month && bill.month !== selectedMonth) || null;
+        const needsRealBill = selectedBill?.synthetic || !selectedBill;
+
+        if (needsRealBill && latestRealBill?.month && !hasAutoSelectedMonthRef.current) {
+          hasAutoSelectedMonthRef.current = true;
+          try {
+            localStorage.setItem('billingSelectedMonth', latestRealBill.month);
+          } catch {}
+          setSelectedMonth(latestRealBill.month);
+          setHistoryMessage('');
+          return;
+        }
+
+        if (!hasAutoSelectedMonthRef.current && history.length > 0 && history.every((bill) => bill?.synthetic)) {
+          const broadResponse = await fetch(`${apiBase}/api/consumer/billing/history?limit=12`, {
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+              'Cache-Control': 'no-cache'
+            }
+          });
+          const broadPayload = await broadResponse.json();
+          if (broadResponse.ok && broadPayload?.status === 'success') {
+            const broadBills = broadPayload?.data?.bills || [];
+            const broadLatestRealBill = broadBills.find((bill) => !bill?.synthetic && bill?.readingPeriod?.billingCycle);
+            if (broadLatestRealBill?.readingPeriod?.billingCycle) {
+              hasAutoSelectedMonthRef.current = true;
+              try {
+                localStorage.setItem('billingSelectedMonth', broadLatestRealBill.readingPeriod.billingCycle);
+              } catch {}
+              setSelectedMonth(broadLatestRealBill.readingPeriod.billingCycle);
+              setHistoryMessage('');
+              return;
+            }
+          }
+        }
+
+        setHistoryMessage(history.length ? '' : 'No billing records found.');
+      } catch (error) {
+        if (!isMounted) return;
+        console.error('Error fetching billing history:', error);
+        setBillingHistory([]);
+        setHistoryMessage(error.message || 'Failed to load billing history.');
+        setToast({ type: 'error', msg: 'Failed to load billing history.' });
+      } finally {
+        if (isMounted) {
+          setHistoryLoading(false);
+        }
+      }
+    };
+
+    loadBillingHistory();
+
+    const refreshTimer = setInterval(() => {
+      loadBillingHistory({ silent: true });
+    }, 15000);
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        loadBillingHistory({ silent: true });
+      }
+    };
+
+    const onFocus = () => {
+      loadBillingHistory({ silent: true });
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      clearInterval(refreshTimer);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('focus', onFocus);
+      isMounted = false;
+    };
+  }, [selectedMonth]);
+
+  const selectedBill = useMemo(() => {
+    return billingHistory.find((item) => item.month === selectedMonth) || null;
+  }, [billingHistory, selectedMonth]);
+
+  const liveBillAmount = selectedBill?.billAmount?.totalAmount ?? 0;
+  const liveBillingParts = selectedBill ? sumCharges(selectedBill.tariffDetails) : sumCharges(null);
+  const liveBillAmountDisplay = liveBillAmount || liveBillingParts.totalAmount;
+  const consumerName = consumerProfile?.name || selectedBill?.raw?.consumerName || 'N/A';
+  const consumerNumber = consumerProfile?.consumerNumber || 'N/A';
+  const consumerAddress = formatAddress(consumerProfile?.address);
+  const meterId = consumerProfile?.meterDetails?.meterId || 'N/A';
+  const tariffPlan = consumerProfile?.tariffPlan || 'N/A';
+  const connectionType = consumerProfile?.connectionType || 'N/A';
+  const billDateLabel = formatDateLabel(selectedBill?.billDate);
+  const billingCycleLabel = selectedBill?.month
+    ? monthRangeLabel(selectedBill.month)
+    : monthRangeLabel(selectedMonth);
+  const dueDateLabel = formatDateLabel(selectedBill?.dueDate);
+  const currentReading = selectedBill?.reading?.currentReading ?? '-';
+  const previousReading = selectedBill?.reading?.previousReading ?? '-';
+  const unitsConsumed = selectedBill?.reading?.unitsConsumed ?? '-';
+  const currentReadingDate = formatDateLabel(selectedBill?.readingPeriod?.endDate || selectedBill?.billDate);
+  const previousReadingDate = formatDateLabel(selectedBill?.readingPeriod?.startDate);
+  const paymentHistoryLabel = historyLoading ? 'Loading live billing history...' : 'Payment History (Live from Backend)';
+  const exportRows = selectedBill ? [
+    { field: 'Consumer Number', value: consumerNumber },
+    { field: 'Consumer Name', value: consumerName },
+    { field: 'Billing Cycle', value: billingCycleLabel },
+    { field: 'Bill Date', value: billDateLabel },
+    { field: 'Due Date', value: dueDateLabel },
+    { field: 'Current Reading', value: currentReading },
+    { field: 'Previous Reading', value: previousReading },
+    { field: 'Units Consumed', value: unitsConsumed },
+    { field: 'Total Bill Amount', value: liveBillAmountDisplay },
+    { field: 'Status', value: selectedBill.status || 'N/A' }
+  ] : billingHistory.map((item) => ({
+    field: item.month,
+    value: item.billAmount?.totalAmount ?? item.billAmount ?? 0,
+    status: item.status
+  }));
 
   // --- Derived Data (based on mock dailyKWh for the selected month) ---
   const daysInMonth = new Date(selectedMonth.split("-")[0], selectedMonth.split("-")[1], 0).getDate();
@@ -254,13 +407,13 @@ export default function BillsPage() {
   const { items: slabItems, subtotal } = applySlabs(kWh, tariff.slabs);
   const totals = computeTotals(subtotal, tariff.fixedCharge, tariff.taxPct);
 
-  // --- MSEDCL Bill (uses fixed 33 unit example regardless of daily breakdown) ---
-  const msedclUnits = 33; // fixed example to mirror screenshot
-  const msedclBillDetails = useMemo(() => computeMSEDCLBill(msedclUnits, MSEDCL_TARIFF), [msedclUnits]);
-
   // --- Actions ---
   function handleMonthChange(e) {
-    setSelectedMonth(e.target.value);
+    const nextMonth = e.target.value;
+    setSelectedMonth(nextMonth);
+    try {
+      localStorage.setItem('billingSelectedMonth', nextMonth);
+    } catch {}
     setLoading(true);
     setTimeout(() => setLoading(false), 600); // Simulate fetch for daily data
   }
@@ -268,7 +421,11 @@ export default function BillsPage() {
   function handlePrevMonth() {
     const idx = months.indexOf(selectedMonth);
     if (idx < months.length - 1) {
-      setSelectedMonth(months[idx + 1]);
+      const nextMonth = months[idx + 1];
+      setSelectedMonth(nextMonth);
+      try {
+        localStorage.setItem('billingSelectedMonth', nextMonth);
+      } catch {}
       setLoading(true);
       setTimeout(() => setLoading(false), 300);
     }
@@ -277,14 +434,22 @@ export default function BillsPage() {
   function handleNextMonth() {
     const idx = months.indexOf(selectedMonth);
     if (idx > 0) {
-      setSelectedMonth(months[idx - 1]);
+      const nextMonth = months[idx - 1];
+      setSelectedMonth(nextMonth);
+      try {
+        localStorage.setItem('billingSelectedMonth', nextMonth);
+      } catch {}
       setLoading(true);
       setTimeout(() => setLoading(false), 300);
     }
   }
 
   function handleExportCSV() {
-    exportCSV(`Bill_${selectedMonth}`, slabItems);
+    if (!exportRows.length) {
+      setToast({ type: 'error', msg: 'No billing data available to export.' });
+      return;
+    }
+    exportCSV(`Bill_${selectedMonth}`, exportRows);
     setToast({ type: "success", msg: "CSV export initiated." });
   }
 
@@ -298,7 +463,6 @@ export default function BillsPage() {
   }
 
   // --- UI ---
-  const dataReady = !loading && isAuthReady;
   return (
     <div className="dc-container">
       {/* Header */}
@@ -307,7 +471,7 @@ export default function BillsPage() {
           <div className="dc-logo-section">
             <img src={BrandingLogo} alt="PowerPulsePro logo" className="dc-logo" />
           </div>
-          <h1 className="dc-page-title">Bill Replication</h1>
+          <h1 className="dc-page-title">Billing Summary</h1>
           <button className="dc-back-btn" onClick={() => navigate('/dashboard')} aria-label="Back to Dashboard">← Dashboard</button>
         </div>
       </header>
@@ -323,7 +487,7 @@ export default function BillsPage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: '0.75rem' }}>
           <div style={{ fontSize: '0.85rem', color: '#64748b' }}>
             <span style={{ fontWeight: 600 }}>{deviceId}</span>
-            {userId && <span style={{ marginLeft: 12 }}>User: <span style={{ fontWeight: 600, color: '#6366f1', fontSize: '0.7rem' }}>{userId.substring(0,8)}...</span></span>}
+            <span style={{ marginLeft: 12 }}>Source: <span style={{ fontWeight: 600, color: '#6366f1', fontSize: '0.7rem' }}>Backend API</span></span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <button className="dc-chip" onClick={handlePrevMonth} disabled={!dataReady || months.indexOf(selectedMonth) === months.length - 1}>← Prev</button>
@@ -338,21 +502,21 @@ export default function BillsPage() {
             {/* Bill Header */}
             <div style={{ textAlign: 'center', marginBottom: 18, borderBottom: '1px solid #000', paddingBottom: 8 }}>
               <h2 style={{ fontSize: '14pt', fontWeight: 'bold', margin: 0 }}>Power Pulse Pro</h2>
-              <div style={{ fontSize: '11pt', margin: '4px 0 0 0' }}>Bill of Supply For: {selectedMonth}</div>
+                <div style={{ fontSize: '11pt', margin: '4px 0 0 0' }}>Bill of Supply For: {billingCycleLabel}</div>
             </div>
 
             {/* Consumer Details */}
             <div className="bill-grid-2col consumer-details" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14, borderBottom: '1px dotted #555', paddingBottom: 10 }}>
               <div>
-                <div style={{ fontWeight: 'bold' }}>Consumer No: {MSEDCL_MOCK_INFO.consumerNo}</div>
-                <div style={{ fontWeight: 'bold' }}>{MSEDCL_MOCK_INFO.consumerName}</div>
-                <div>{MSEDCL_MOCK_INFO.consumerAddress}</div>
+                <div style={{ fontWeight: 'bold' }}>Consumer No: {consumerNumber}</div>
+                <div style={{ fontWeight: 'bold' }}>{consumerName}</div>
+                <div>{consumerAddress}</div>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 8px', fontSize: '9pt' }}>
-                <div style={{ fontWeight: 'bold' }}>Bill Date:</div><div>{MSEDCL_MOCK_INFO.billDate}</div>
-                <div style={{ fontWeight: 'bold' }}>Bill Amount:</div><div style={{ fontWeight: 'bold', color: '#B30000' }}>{formatCurrencyINR(msedclBillDetails.roundedBill)}</div>
-                <div style={{ fontWeight: 'bold' }}>Due Date:</div><div style={{ fontWeight: 'bold', color: '#B30000' }}>{MSEDCL_MOCK_INFO.dueDate}</div>
-                <div style={{ fontWeight: 'bold' }}>HSN Code:</div><div>{MSEDCL_MOCK_INFO.hsnCode}</div>
+                <div style={{ fontWeight: 'bold' }}>Bill Date:</div><div>{billDateLabel}</div>
+                <div style={{ fontWeight: 'bold' }}>Bill Amount:</div><div style={{ fontWeight: 'bold', color: '#B30000' }}>{formatCurrencyINR(liveBillAmountDisplay)}</div>
+                <div style={{ fontWeight: 'bold' }}>Due Date:</div><div style={{ fontWeight: 'bold', color: '#B30000' }}>{dueDateLabel}</div>
+                <div style={{ fontWeight: 'bold' }}>Meter ID:</div><div>{meterId}</div>
               </div>
             </div>
 
@@ -360,8 +524,8 @@ export default function BillsPage() {
             <div className="bill-grid-2col reading-usage" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #000', padding: '4px 0', fontWeight: 'bold', fontSize: '9pt' }}>
-                  <span>Reading Group: J2</span>
-                  <span>Bill Period: {MSEDCL_MOCK_INFO.billPeriod}</span>
+                  <span>Connection Type: {connectionType}</span>
+                  <span>Billing Cycle: {billingCycleLabel}</span>
                 </div>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '9pt', marginTop: 4 }}>
                   <thead>
@@ -375,20 +539,19 @@ export default function BillsPage() {
                   </thead>
                   <tbody>
                     <tr style={{ textAlign: 'center' }}>
-                      <td style={tableD}>{MSEDCL_MOCK_INFO.currentReading}</td>
-                      <td style={tableD}>{MSEDCL_MOCK_INFO.previousReading}</td>
-                      <td style={tableD}>{MSEDCL_MOCK_INFO.mf}</td>
-                      <td style={tableD}>{msedclUnits}</td>
-                      <td style={tableD}>{msedclUnits}</td>
+                      <td style={tableD}>{currentReading}</td>
+                      <td style={tableD}>{previousReading}</td>
+                      <td style={tableD}>1</td>
+                      <td style={tableD}>{unitsConsumed}</td>
+                      <td style={tableD}>{unitsConsumed}</td>
                     </tr>
                   </tbody>
                 </table>
               </div>
               <div style={{ fontSize: '9pt' }}>
-                <div><strong>Supply Date:</strong> {MSEDCL_MOCK_INFO.supplyDate} &nbsp; | &nbsp; <strong>Sanct. Load:</strong> {MSEDCL_MOCK_INFO.sanctLoad}</div>
-                <div><strong>Tariff/Category:</strong> {MSEDCL_MOCK_INFO.tariffCategory}</div>
-                <div><strong>Current Reading Date:</strong> {MSEDCL_MOCK_INFO.readingDateCurrent}</div>
-                <div><strong>Previous Reading Date:</strong> {MSEDCL_MOCK_INFO.readingDatePrevious}</div>
+                <div><strong>Tariff Plan:</strong> {tariffPlan} &nbsp; | &nbsp; <strong>Meter ID:</strong> {meterId}</div>
+                <div><strong>Current Reading Date:</strong> {currentReadingDate}</div>
+                <div><strong>Previous Reading Date:</strong> {previousReadingDate}</div>
               </div>
             </div>
 
@@ -397,37 +560,31 @@ export default function BillsPage() {
               <div style={{ textAlign: 'center', fontWeight: 'bold', fontSize: '11pt', marginBottom: 8 }}>BILL DETAILS</div>
               <table className="bill-details-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '10pt' }}>
                 <tbody>
-                  <tr><td style={billTDL}>Fixed Charges</td><td style={billTDR}>{formatCurrencyINR(msedclBillDetails.fixedCharge)}</td></tr>
-                  <tr><td style={billTDL}>Energy Charges</td><td style={billTDR}>{formatCurrencyINR(msedclBillDetails.energyCharge)}</td></tr>
-                  <tr><td style={billTDL}>Wheeling Charges ({MSEDCL_TARIFF.wheelingRate}/ Unit)</td><td style={billTDR}>{formatCurrencyINR(msedclBillDetails.wheelingCharge)}</td></tr>
-                  <tr><td style={billTDL}>F.A.C.</td><td style={billTDR}>{formatCurrencyINR(msedclBillDetails.facCharge)}</td></tr>
-                  <tr><td style={billTDL}>Electricity Duty ({MSEDCL_TARIFF.electricityDutyPct}%)</td><td style={billTDR}>{formatCurrencyINR(msedclBillDetails.electricityDuty)}</td></tr>
-                  <tr><td style={billTDL}>Tax on Sale ({MSEDCL_TARIFF.taxOnSalePct}%)</td><td style={billTDR}>{formatCurrencyINR(msedclBillDetails.taxOnSale)}</td></tr>
+                  <tr><td style={billTDL}>Fixed Charges</td><td style={billTDR}>{formatCurrencyINR(liveBillingParts.fixedCharges)}</td></tr>
+                  <tr><td style={billTDL}>Energy / Slab Charges</td><td style={billTDR}>{formatCurrencyINR(liveBillingParts.slabCharges)}</td></tr>
+                  <tr><td style={billTDL}>Electricity Duty</td><td style={billTDR}>{formatCurrencyINR(liveBillingParts.electricityDuty)}</td></tr>
+                  <tr><td style={billTDL}>Fuel Adjustment</td><td style={billTDR}>{formatCurrencyINR(liveBillingParts.fuelAdjustment)}</td></tr>
+                  <tr><td style={billTDL}>Other Charges</td><td style={billTDR}>{formatCurrencyINR(liveBillingParts.otherCharges)}</td></tr>
                   <tr style={{ fontWeight: 'bold', borderTop: '1px solid #000', background: '#e0e0e0' }}>
-                    <td style={billTDL}>Total Current Bill (Rs)</td>
-                    <td style={billTDR}>{formatCurrencyINR(msedclBillDetails.totalCurrentBill)}</td>
+                    <td style={billTDL}>Total Bill Amount (Rs)</td>
+                    <td style={billTDR}>{formatCurrencyINR(liveBillAmountDisplay)}</td>
                   </tr>
-                  <tr><td style={billTDL}>Current Interest</td><td style={billTDR}>₹0.00</td></tr>
-                  <tr style={{ background: '#f5f5f5' }}><td style={billTDL}>Net Arrears</td><td style={billTDR}>{formatCurrencyINR(msedclBillDetails.netArrears)}</td></tr>
-                  <tr style={{ background: '#f5f5f5' }}><td style={billTDL}>Adjustments</td><td style={billTDR}>{formatCurrencyINR(msedclBillDetails.adjustments)}</td></tr>
-                  <tr style={{ background: '#f5f5f5' }}><td style={billTDL}>Interest Arrears</td><td style={billTDR}>₹0.00</td></tr>
-                  <tr style={{ fontWeight: 'bold' }}><td style={billTDL}>Total Arrears</td><td style={billTDR}>{formatCurrencyINR(msedclBillDetails.totalArrears)}</td></tr>
-                  <tr style={{ fontWeight: 'bold', borderTop: '1px solid #000' }}><td style={billTDL}>Net Bill Amount</td><td style={billTDR}>{formatCurrencyINR(msedclBillDetails.netBillAmount)}</td></tr>
-                  <tr style={{ fontWeight: 'bold', fontSize: '11pt', background: '#ffe0e0' }}><td style={billTDL}>Rounded Bill (Rs)</td><td style={billTDR}>{formatCurrencyINR(msedclBillDetails.roundedBill)}</td></tr>
+                  <tr><td style={billTDL}>Units Consumed</td><td style={billTDR}>{unitsConsumed}</td></tr>
+                  <tr style={{ fontWeight: 'bold', borderTop: '1px solid #000' }}><td style={billTDL}>Rounded Bill (Rs)</td><td style={billTDR}>{formatCurrencyINR(Math.round(liveBillAmountDisplay))}</td></tr>
                 </tbody>
               </table>
             </div>
 
             {/* Payment Summary */}
             <div style={{ border: '2px solid #B30000', padding: 10, textAlign: 'center', marginBottom: 18, background: '#fffafa' }}>
-              <div style={{ fontWeight: 'bold', fontSize: '12pt', color: '#B30000' }}>Pay Rs. {formatCurrencyINR(msedclBillDetails.dueOnDate)}</div>
-              <div style={{ fontSize: '10pt', marginTop: 6 }}>After this date: {MSEDCL_MOCK_INFO.dueDate}, Pay Rs. {formatCurrencyINR(msedclBillDetails.dueAfterDate)}</div>
-              <div style={{ fontSize: '9pt', marginTop: 10, color: '#006400', fontWeight: 'bold' }}>Prompt Payment Discount: {formatCurrencyINR(msedclBillDetails.discountAmount)}, if bill is paid on or before {MSEDCL_MOCK_INFO.payBeforeDiscountDate}</div>
+              <div style={{ fontWeight: 'bold', fontSize: '12pt', color: '#B30000' }}>Pay Rs. {formatCurrencyINR(Math.round(liveBillAmountDisplay))}</div>
+              <div style={{ fontSize: '10pt', marginTop: 6 }}>Due Date: {dueDateLabel}</div>
+              <div style={{ fontSize: '9pt', marginTop: 10, color: '#006400', fontWeight: 'bold' }}>Status: {selectedBill?.status || 'N/A'}</div>
             </div>
 
-            {/* Billing History (Firestore) */}
+            {/* Billing History (Backend) */}
             <div style={{ borderTop: '1px solid #ccc', paddingTop: 10 }}>
-              <div style={{ fontWeight: 'bold', fontSize: '11pt', marginBottom: 10 }}>Payment History (Live from Firestore)</div>
+              <div style={{ fontWeight: 'bold', fontSize: '11pt', marginBottom: 10 }}>{paymentHistoryLabel}</div>
               <div className="table-responsive" style={{ width: '100%', overflowX: 'auto' }}>
               <table className="history-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '9pt', minWidth: 420 }}>
                 <thead>
@@ -442,7 +599,7 @@ export default function BillsPage() {
                   {billingHistory.length === 0 ? (
                     <tr>
                       <td colSpan={4} style={{ padding: '8px', textAlign: 'center', color: '#64748b' }}>
-                        {isAuthReady ? 'No billing records found.' : 'Loading history...'}
+                        {historyLoading ? 'Loading history...' : historyMessage || 'No billing records found.'}
                       </td>
                     </tr>
                   ) : (

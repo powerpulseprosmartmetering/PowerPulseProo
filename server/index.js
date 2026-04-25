@@ -26,16 +26,52 @@ const PORT = process.env.PORT || 5000;
 app.use(helmet());
 
 // Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again later.'
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: process.env.NODE_ENV === 'production' ? 50 : 200,
+  message: 'Too many login attempts from this IP, please try again later.'
 });
-app.use(limiter);
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: process.env.NODE_ENV === 'production' ? 300 : 2000,
+  message: 'Too many requests from this IP, please try again later.',
+  skip: (req) => req.path.startsWith('/api/auth') || req.path === '/api/health'
+});
+
+app.use(apiLimiter);
+app.use('/api/auth', authLimiter);
 
 // CORS configuration
+const configuredClientUrls = [
+  process.env.CLIENT_URL,
+  ...(process.env.CLIENT_URLS ? process.env.CLIENT_URLS.split(',') : [])
+]
+  .filter(Boolean)
+  .map((url) => url.trim());
+
+const defaultDevOrigins = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:5174',
+  'http://127.0.0.1:5174'
+];
+const allowedOrigins = Array.from(new Set([...configuredClientUrls, ...defaultDevOrigins]));
+
+const isDevLocalOrigin = (origin) => {
+  if (process.env.NODE_ENV === 'production') return false;
+  return /^https?:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
+};
+
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  origin: (origin, callback) => {
+    // Allow non-browser clients and approved web origins.
+    if (!origin || allowedOrigins.includes(origin) || isDevLocalOrigin(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`Not allowed by CORS: ${origin}`));
+  },
   credentials: true
 }));
 

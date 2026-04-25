@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { subscribeReadings, subscribeEvents, readingToUsage } from '../firebase';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import Logo from '../assets/Logo.jpg';
 
 // Icons
@@ -307,7 +307,9 @@ const useScreenSize = () => {
   return screenSize;
 };
 
-const CustomerDashboard = () => {
+const CustomerDashboard = ({ adminView = false }) => {
+  const { consumerId: routeConsumerId } = useParams();
+  const adminConsumerId = adminView ? routeConsumerId : null;
   const [loading, setLoading] = useState(true);
   const buildZeroMetrics = (historyLen = 10) => ({
     voltage: { current: 0, min: 0, max: 0, status: 'offline', history: Array(historyLen).fill(0) },
@@ -344,8 +346,11 @@ const CustomerDashboard = () => {
   // Consumer identity (from login stored in localStorage by ConsumerLogin)
   const [consumerLabel, setConsumerLabel] = useState('Consumer');
   useEffect(() => {
+    if (adminView) return;
     try {
-      const raw = typeof window !== 'undefined' ? localStorage.getItem('user') : null;
+      const raw = typeof window !== 'undefined'
+        ? (localStorage.getItem('consumerProfile') || localStorage.getItem('user'))
+        : null;
       if (raw) {
         const parsed = JSON.parse(raw);
         // Common possible keys: name, fullName, consumerName, consumerNumber, consumerId, id
@@ -359,7 +364,7 @@ const CustomerDashboard = () => {
     } catch (e) {
       console.warn('Failed to parse stored user info', e);
     }
-  }, []);
+  }, [adminView]);
   // Get responsive styles
   const responsiveStyles = getResponsiveStyles(screenSize.width, screenSize.isTouchDevice);
   // Shorten label further for narrow mobile widths
@@ -372,6 +377,136 @@ const CustomerDashboard = () => {
     return consumerLabel;
   }, [consumerLabel, isMobile]);
   useEffect(() => {
+    if (adminView) {
+      const apiBase = (import.meta.env.VITE_API_BASE_URL
+        || (import.meta.env.DEV ? 'http://localhost:5000' : 'https://powerpulseproo-api.onrender.com'))
+        .replace(/\/$/, '');
+
+      const getToken = () => localStorage.getItem('adminToken') || localStorage.getItem('token') || localStorage.getItem('authToken');
+
+      const buildHistory = (arr, selector, fallback) => {
+        const values = (arr || []).map(selector).filter((v) => v !== undefined && v !== null && !Number.isNaN(v));
+        if (!values.length) return Array.from({ length: 10 }, () => fallback);
+        const filled = values.slice(-10);
+        while (filled.length < 10) filled.unshift(filled[0]);
+        return filled;
+      };
+
+      const minOf = (arr, fallback) => (arr.length ? Math.min(...arr) : fallback);
+      const maxOf = (arr, fallback) => (arr.length ? Math.max(...arr) : fallback);
+
+      const fetchAdminConsumerLive = async () => {
+        if (!adminConsumerId) {
+          setLoading(false);
+          return;
+        }
+        try {
+          const token = getToken();
+          const res = await fetch(`${apiBase}/api/admin/consumers/${adminConsumerId}/live?limit=20`, {
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { Authorization: `Bearer ${token}` } : {})
+            }
+          });
+          const payload = await res.json();
+          if (!res.ok) {
+            throw new Error(payload?.message || 'Failed to load consumer live data');
+          }
+
+          const data = payload?.data || {};
+          const consumer = data.consumer || {};
+          const latest = data.latestReading || null;
+          const readings = (data.recentReadings || []).slice().sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+          const events = data.recentEvents || [];
+
+          setConsumerLabel(consumer?.name || consumer?.consumerNumber || 'Consumer');
+
+          if (!latest) {
+            setMeterData(buildZeroMetrics());
+            setAlerts([]);
+            setDeviceOnline(false);
+            setLastUpdate(new Date());
+            setLoading(false);
+            return;
+          }
+
+          const voltageHistory = buildHistory(readings, (r) => r?.powerQuality?.voltage, latest?.powerQuality?.voltage ?? 0);
+          const currentHistory = buildHistory(readings, (r) => r?.powerQuality?.current, latest?.powerQuality?.current ?? 0);
+          const powerHistory = buildHistory(readings, (r) => (r?.powerQuality?.voltage || 0) * (r?.powerQuality?.current || 0), (latest?.powerQuality?.voltage || 0) * (latest?.powerQuality?.current || 0));
+          const energyHistory = buildHistory(readings, (r) => r?.reading?.unitsConsumed, latest?.reading?.unitsConsumed ?? 0);
+          const pfHistory = buildHistory(readings, (r) => r?.powerQuality?.powerFactor, latest?.powerQuality?.powerFactor ?? 0);
+          const freqHistory = buildHistory(readings, (r) => r?.powerQuality?.frequency, latest?.powerQuality?.frequency ?? 0);
+
+          setMeterData({
+            voltage: {
+              current: latest?.powerQuality?.voltage ?? 0,
+              min: minOf(voltageHistory, 0),
+              max: maxOf(voltageHistory, 0),
+              status: 'normal',
+              history: voltageHistory
+            },
+            current: {
+              current: latest?.powerQuality?.current ?? 0,
+              min: minOf(currentHistory, 0),
+              max: maxOf(currentHistory, 0),
+              status: 'normal',
+              history: currentHistory
+            },
+            power: {
+              current: (latest?.powerQuality?.voltage || 0) * (latest?.powerQuality?.current || 0),
+              min: minOf(powerHistory, 0),
+              max: maxOf(powerHistory, 0),
+              status: 'normal',
+              history: powerHistory
+            },
+            energy: {
+              current: latest?.reading?.unitsConsumed ?? 0,
+              min: minOf(energyHistory, 0),
+              max: maxOf(energyHistory, 0),
+              status: 'normal',
+              history: energyHistory
+            },
+            powerFactor: {
+              current: latest?.powerQuality?.powerFactor ?? 0,
+              min: minOf(pfHistory, 0),
+              max: maxOf(pfHistory, 0),
+              status: (latest?.powerQuality?.powerFactor ?? 1) < 0.9 ? 'warning' : 'normal',
+              history: pfHistory
+            },
+            frequency: {
+              current: latest?.powerQuality?.frequency ?? 0,
+              min: minOf(freqHistory, 0),
+              max: maxOf(freqHistory, 0),
+              status: 'normal',
+              history: freqHistory
+            }
+          });
+
+          const mappedAlerts = events.slice(0, 5).map((event) => ({
+            id: event._id,
+            type: String(event.severity || 'info').toLowerCase(),
+            message: event.detail || event.type,
+            time: new Date(event.occurredAt || event.createdAt).toLocaleTimeString()
+          }));
+          setAlerts(mappedAlerts);
+          setDeviceOnline(consumer?.status !== 'disconnected');
+          setLastUpdate(new Date());
+          setLoading(false);
+        } catch (error) {
+          console.error('Admin consumer dashboard load error:', error);
+          setMeterData(buildZeroMetrics());
+          setAlerts([{ id: 'admin-load-error', type: 'critical', message: error.message || 'Failed to load consumer data', time: new Date().toLocaleTimeString() }]);
+          setDeviceOnline(false);
+          setLastUpdate(new Date());
+          setLoading(false);
+        }
+      };
+
+      fetchAdminConsumerLive();
+      const timer = setInterval(fetchAdminConsumerLive, 10000);
+      return () => clearInterval(timer);
+    }
+
     let unsubscribers = [];
     // Initialize accumulator (no sample data)
     stateRef.current = { currentUsage: null, powerQuality: null, meterReadings: {}, alerts: {} };
@@ -691,10 +826,11 @@ const CustomerDashboard = () => {
       unsubscribers.forEach(fn => { try { fn(); } catch(_) {} });
       if (autoRefreshTimerRef.current) clearTimeout(autoRefreshTimerRef.current);
     };
-  }, []);
+  }, [adminView, adminConsumerId]);
 
   // Heartbeat watcher: mark offline if no realtime update in threshold (e.g., 30s)
   useEffect(() => {
+    if (adminView) return;
     const OFFLINE_THRESHOLD_MS = 30000; // 30 seconds without new data
     const interval = setInterval(() => {
       const last = lastRealtimeRef.current; // may be null if never received
@@ -726,7 +862,7 @@ const CustomerDashboard = () => {
       // If offline but new realtime arrives, other effect will set deviceOnline true
     }, 5000);
     return () => clearInterval(interval);
-  }, [deviceOnline]);
+  }, [deviceOnline, adminView]);
   const getStatusColor = (status) => {
     switch (status) {
       case 'normal': return { borderLeft: '4px solid #10b981' };

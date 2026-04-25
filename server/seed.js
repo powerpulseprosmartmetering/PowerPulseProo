@@ -1,5 +1,4 @@
 const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
 const Consumer = require('./models/Consumer');
 const Admin = require('./models/Admin');
 require('dotenv').config();
@@ -46,9 +45,11 @@ const DEFAULT_ADMIN = {
     'write-billing': true,
     'read-alerts': true,
     'write-alerts': true,
-    'read-meter': true,
-    'write-meter': true,
-    'admin-dashboard': true
+    'read-meters': true,
+    'write-meters': true,
+    'system-settings': true,
+    'user-management': true,
+    'reports-access': true
   },
   status: 'active'
 };
@@ -67,22 +68,60 @@ async function seedDatabase() {
     });
 
     if (!existingConsumer) {
-      // Hash password
-      const hashedPassword = await bcrypt.hash(DEFAULT_CONSUMER.password, 12);
-      
-      // Create default consumer
-      const consumer = new Consumer({
-        ...DEFAULT_CONSUMER,
-        password: hashedPassword
-      });
-      
+      // Create default consumer with the plain password; the model pre-save hook
+      // hashes it exactly once.
+      const consumer = new Consumer(DEFAULT_CONSUMER);
+
       await consumer.save();
       console.log('✅ Default consumer created:');
       console.log(`   Consumer Number: ${DEFAULT_CONSUMER.consumerNumber}`);
       console.log(`   Email: ${DEFAULT_CONSUMER.email}`);
       console.log(`   Password: ${DEFAULT_CONSUMER.password}`);
     } else {
-      console.log('ℹ️  Default consumer already exists');
+      // Refresh the existing record so any previously double-hashed password is
+      // replaced with a correctly hashed value.
+      existingConsumer.set({
+        ...DEFAULT_CONSUMER,
+        password: DEFAULT_CONSUMER.password
+      });
+      await existingConsumer.save();
+      console.log('ℹ️  Default consumer already existed; credentials refreshed');
+    }
+
+    const existingAdmin = await Admin.findOne({ adminId: DEFAULT_ADMIN.adminId });
+
+    if (!existingAdmin) {
+      const admin = new Admin({
+        ...DEFAULT_ADMIN,
+        name: DEFAULT_ADMIN.personalInfo.fullName,
+        email: DEFAULT_ADMIN.personalInfo.email,
+        phone: DEFAULT_ADMIN.personalInfo.phoneNumber,
+        role: DEFAULT_ADMIN.role.replace('_', '-'),
+        permissions: Object.entries(DEFAULT_ADMIN.permissions)
+          .filter(([, enabled]) => enabled)
+          .map(([permission]) => permission)
+      });
+
+      await admin.save();
+      console.log('✅ Default admin created:');
+      console.log(`   Admin ID: ${DEFAULT_ADMIN.adminId}`);
+      console.log(`   Email: ${DEFAULT_ADMIN.personalInfo.email}`);
+      console.log(`   Password: ${DEFAULT_ADMIN.password}`);
+    } else {
+      existingAdmin.set({
+        adminId: DEFAULT_ADMIN.adminId,
+        name: DEFAULT_ADMIN.personalInfo.fullName,
+        email: DEFAULT_ADMIN.personalInfo.email,
+        phone: DEFAULT_ADMIN.personalInfo.phoneNumber,
+        role: DEFAULT_ADMIN.role.replace('_', '-'),
+        permissions: Object.entries(DEFAULT_ADMIN.permissions)
+          .filter(([, enabled]) => enabled)
+          .map(([permission]) => permission),
+        status: DEFAULT_ADMIN.status,
+        password: DEFAULT_ADMIN.password
+      });
+      await existingAdmin.save();
+      console.log('ℹ️  Default admin already existed; credentials refreshed');
     }
 
     console.log('✅ Consumer account ready in MongoDB Atlas!');

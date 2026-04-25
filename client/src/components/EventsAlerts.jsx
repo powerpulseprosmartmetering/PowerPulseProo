@@ -218,13 +218,15 @@ export default function EventsAlerts(){
 		return ()=> window.removeEventListener('device-config-updated', handler);
 	},[]);
 
-	const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://powerpulseproo-api.onrender.com';
+	const API_BASE = (import.meta.env.VITE_API_BASE_URL
+		|| (import.meta.env.DEV ? 'http://localhost:5000' : 'https://powerpulseproo-api.onrender.com'))
+		.replace(/\/$/, '');
 	const SHOW_DIAGNOSTICS = import.meta.env.VITE_SHOW_EVENT_DIAGNOSTICS === 'true';
 	const SHOW_LIVE_TOGGLE = import.meta.env.VITE_SHOW_LIVE_TOGGLE === 'true';
 	const SHOW_ACK_SELECTED = import.meta.env.VITE_SHOW_ACK_SELECTED === 'true';
 	const SHOW_REFRESH_BUTTON = import.meta.env.VITE_SHOW_REFRESH_BUTTON === 'true';
 	const SHOW_AUTO_TOGGLE = import.meta.env.VITE_SHOW_AUTO_TOGGLE === 'true';
-	const getToken = () => localStorage.getItem('authToken');
+	const getToken = () => localStorage.getItem('authToken') || localStorage.getItem('token');
 	const capitalize = (s) => s.charAt(0) + s.slice(1).toLowerCase();
 
 	const mapEvent = (e)=>({

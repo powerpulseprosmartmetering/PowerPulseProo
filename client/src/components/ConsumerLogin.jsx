@@ -435,8 +435,10 @@ const ConsumerLogin = () => {
     setLoading(true);
     
     try {
-      // Backend API endpoint
-      const API_BASE_URL = 'https://powerpulseproo-api.onrender.com/api';
+      // Use local API in dev by default; allow override through VITE_API_BASE_URL.
+      const apiBase = import.meta.env.VITE_API_BASE_URL
+        || (import.meta.env.DEV ? 'http://localhost:5000' : 'https://powerpulseproo-api.onrender.com');
+      const API_BASE_URL = `${apiBase.replace(/\/$/, '')}/api`;
       
       // Login request with consumer number
       const loginResponse = await axios.post(`${API_BASE_URL}/auth/consumer/login`, {
@@ -446,7 +448,13 @@ const ConsumerLogin = () => {
 
       if (loginResponse.data.status === 'success') {
         // Store token in localStorage
+        localStorage.removeItem('admin');
+        localStorage.removeItem('adminToken');
+        localStorage.removeItem('adminProfile');
         localStorage.setItem('token', loginResponse.data.data.token);
+        localStorage.setItem('authToken', loginResponse.data.data.token);
+        localStorage.setItem('consumerToken', loginResponse.data.data.token);
+        localStorage.setItem('consumerProfile', JSON.stringify(loginResponse.data.data.consumer));
         localStorage.setItem('user', JSON.stringify(loginResponse.data.data.consumer));
         
         // Clear any previous errors

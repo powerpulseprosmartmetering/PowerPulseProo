@@ -82,7 +82,46 @@ export default function SettingsConfig() {
   const [config, setConfig] = useState(initialConfig);
   const [saveStatus, setSaveStatus] = useState('');
   const [consumerData, setConsumerData] = useState(null);
+  const [accountForm, setAccountForm] = useState({
+    name: '',
+    phone: '',
+    address: {
+      street: '',
+      city: '',
+      state: '',
+      pincode: ''
+    }
+  });
+  const [notificationPrefs, setNotificationPrefs] = useState({
+    email: true,
+    sms: false,
+    push: true
+  });
+  const [accountSaveStatus, setAccountSaveStatus] = useState('');
+  const [savingAccount, setSavingAccount] = useState(false);
   const deviceId = 'PPPRO-001';
+  const apiBase = (import.meta.env.VITE_API_BASE_URL
+    || (import.meta.env.DEV ? 'http://localhost:5000' : 'https://powerpulseproo-api.onrender.com'))
+    .replace(/\/$/, '');
+
+  const syncAccountFromConsumer = (data) => {
+    if (!data) return;
+    setAccountForm({
+      name: data.name || '',
+      phone: data.phone || '',
+      address: {
+        street: data.address?.street || '',
+        city: data.address?.city || '',
+        state: data.address?.state || '',
+        pincode: data.address?.pincode || ''
+      }
+    });
+    setNotificationPrefs({
+      email: data.preferences?.notifications?.email ?? true,
+      sms: data.preferences?.notifications?.sms ?? false,
+      push: data.preferences?.notifications?.push ?? true
+    });
+  };
 
   function parseNum(v){ const n = parseFloat(v); return isNaN(n)? null : n; }
 
@@ -90,7 +129,10 @@ export default function SettingsConfig() {
     try {
       // Clear all stored user data
       localStorage.removeItem('user');
+      localStorage.removeItem('consumerProfile');
+      localStorage.removeItem('consumerToken');
       localStorage.removeItem('token');
+      localStorage.removeItem('authToken');
       localStorage.removeItem('isLoggedIn');
       
       // Clear any device-specific configs if needed
@@ -162,16 +204,143 @@ export default function SettingsConfig() {
       }
       
       // Load consumer data from localStorage (stored by ConsumerLogin)
-      const userRaw = localStorage.getItem('user');
+      const userRaw = localStorage.getItem('consumerProfile') || localStorage.getItem('user');
       if (userRaw) {
         const userData = JSON.parse(userRaw);
         setConsumerData(userData);
+        syncAccountFromConsumer(userData);
       }
     } catch(e){ 
       console.warn('Failed to load config or user data:', e);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Fetch latest consumer profile from backend so Account tab is editable with fresh data.
+  React.useEffect(() => {
+    const token = localStorage.getItem('consumerToken') || localStorage.getItem('token') || localStorage.getItem('authToken');
+    if (!token) return;
+
+    const fetchProfile = async () => {
+      try {
+        const response = await fetch(`${apiBase}/api/consumer/profile`, {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          }
+        });
+        const payload = await response.json();
+        if (!response.ok || payload?.status !== 'success') return;
+
+        const freshConsumer = payload?.data?.consumer;
+        if (freshConsumer) {
+          setConsumerData(freshConsumer);
+          syncAccountFromConsumer(freshConsumer);
+          localStorage.setItem('consumerProfile', JSON.stringify(freshConsumer));
+          localStorage.setItem('user', JSON.stringify(freshConsumer));
+        }
+      } catch (error) {
+        console.warn('Failed to refresh consumer profile:', error);
+      }
+    };
+
+    fetchProfile();
+  }, [apiBase]);
+
+  const handleAccountFieldChange = (field, value) => {
+    setAccountForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleAddressFieldChange = (field, value) => {
+    setAccountForm((prev) => ({
+      ...prev,
+      address: {
+        ...prev.address,
+        [field]: value
+      }
+    }));
+  };
+
+  const handleNotificationChange = (field, checked) => {
+    setNotificationPrefs((prev) => ({ ...prev, [field]: checked }));
+  };
+
+  const handleSaveAccountPreferences = async () => {
+    const token = localStorage.getItem('token') || localStorage.getItem('authToken');
+    if (!token) {
+      setAccountSaveStatus('Please login again to save changes.');
+      return;
+    }
+
+    setSavingAccount(true);
+    setAccountSaveStatus('');
+
+    try {
+      const profilePayload = {
+        name: accountForm.name,
+        phone: accountForm.phone,
+        address: {
+          street: accountForm.address.street,
+          city: accountForm.address.city,
+          state: accountForm.address.state,
+          pincode: accountForm.address.pincode
+        }
+      };
+
+      const profileResponse = await fetch(`${apiBase}/api/consumer/profile`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(profilePayload)
+      });
+      const profileResult = await profileResponse.json();
+      if (!profileResponse.ok || profileResult?.status !== 'success') {
+        throw new Error(profileResult?.message || 'Failed to update profile');
+      }
+
+      const existingTheme = consumerData?.preferences?.theme || 'light';
+      const existingLanguage = consumerData?.preferences?.language || 'en';
+      const preferencesPayload = {
+        notifications: notificationPrefs,
+        theme: existingTheme,
+        language: existingLanguage
+      };
+
+      const prefResponse = await fetch(`${apiBase}/api/consumer/preferences`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(preferencesPayload)
+      });
+      const prefResult = await prefResponse.json();
+      if (!prefResponse.ok || prefResult?.status !== 'success') {
+        throw new Error(prefResult?.message || 'Failed to update notification preferences');
+      }
+
+      const mergedConsumer = {
+        ...profileResult?.data?.consumer,
+        preferences: {
+          ...(profileResult?.data?.consumer?.preferences || {}),
+          notifications: notificationPrefs,
+          theme: existingTheme,
+          language: existingLanguage
+        }
+      };
+
+      setConsumerData(mergedConsumer);
+      localStorage.setItem('user', JSON.stringify(mergedConsumer));
+      setAccountSaveStatus('Account preferences saved successfully.');
+      setTimeout(() => setAccountSaveStatus(''), 4000);
+    } catch (error) {
+      setAccountSaveStatus(error.message || 'Failed to save account preferences.');
+    } finally {
+      setSavingAccount(false);
+    }
+  };
 
   return (
     <div className="sc-container">
@@ -225,7 +394,7 @@ export default function SettingsConfig() {
                       <div className="sc-account-profile-row">
                         <div className="sc-account-field">
                           <label className="sc-label">Consumer Name</label>
-                          <input className="sc-input" value={consumerData.name || 'N/A'} readOnly />
+                          <input className="sc-input" value={accountForm.name} onChange={(e)=>handleAccountFieldChange('name', e.target.value)} />
                         </div>
                         <div className="sc-account-field">
                           <label className="sc-label">Email Address</label>
@@ -233,7 +402,7 @@ export default function SettingsConfig() {
                         </div>
                         <div className="sc-account-field">
                           <label className="sc-label">Mobile Number</label>
-                          <input className="sc-input" value={consumerData.phone || 'N/A'} readOnly />
+                          <input className="sc-input" value={accountForm.phone} onChange={(e)=>handleAccountFieldChange('phone', e.target.value)} />
                         </div>
                         <div className="sc-account-field">
                           <label className="sc-label">Consumer Number</label>
@@ -260,13 +429,21 @@ export default function SettingsConfig() {
                       </div>
                       {consumerData.address && (
                         <div className="sc-account-profile-row">
-                          <div className="sc-account-field" style={{ gridColumn: '1 / -1' }}>
-                            <label className="sc-label">Address</label>
-                            <input 
-                              className="sc-input" 
-                              value={`${consumerData.address.street}, ${consumerData.address.city}, ${consumerData.address.state} - ${consumerData.address.pincode}`} 
-                              readOnly 
-                            />
+                          <div className="sc-account-field">
+                            <label className="sc-label">Street</label>
+                            <input className="sc-input" value={accountForm.address.street} onChange={(e)=>handleAddressFieldChange('street', e.target.value)} />
+                          </div>
+                          <div className="sc-account-field">
+                            <label className="sc-label">City</label>
+                            <input className="sc-input" value={accountForm.address.city} onChange={(e)=>handleAddressFieldChange('city', e.target.value)} />
+                          </div>
+                          <div className="sc-account-field">
+                            <label className="sc-label">State</label>
+                            <input className="sc-input" value={accountForm.address.state} onChange={(e)=>handleAddressFieldChange('state', e.target.value)} />
+                          </div>
+                          <div className="sc-account-field">
+                            <label className="sc-label">Pincode</label>
+                            <input className="sc-input" value={accountForm.address.pincode} onChange={(e)=>handleAddressFieldChange('pincode', e.target.value)} />
                           </div>
                         </div>
                       )}
@@ -298,18 +475,26 @@ export default function SettingsConfig() {
                     <label className="sc-account-checkbox">
                       <input 
                         type="checkbox" 
-                        checked={consumerData?.preferences?.notifications?.email ?? true} 
-                        readOnly 
+                        checked={notificationPrefs.email}
+                        onChange={(e)=>handleNotificationChange('email', e.target.checked)}
                       /> 
                       Receive Email Alerts
                     </label>
                     <label className="sc-account-checkbox">
                       <input 
                         type="checkbox" 
-                        checked={consumerData?.preferences?.notifications?.sms ?? false} 
-                        readOnly 
+                        checked={notificationPrefs.sms}
+                        onChange={(e)=>handleNotificationChange('sms', e.target.checked)}
                       /> 
                       Receive SMS Alerts
+                    </label>
+                    <label className="sc-account-checkbox">
+                      <input 
+                        type="checkbox" 
+                        checked={notificationPrefs.push}
+                        onChange={(e)=>handleNotificationChange('push', e.target.checked)}
+                      /> 
+                      Receive Push Alerts
                     </label>
                   </div>
                 </div>
@@ -318,7 +503,10 @@ export default function SettingsConfig() {
                   <div className="sc-account-field"><label className="sc-label">API Token</label><input className="sc-input" value="pppr-********-******-**" readOnly /></div>
                 </div>
                 <div className="sc-account-save-row">
-                  <button type="button" className="sc-btn sc-btn-primary sc-account-btn">Save Account Preferences</button>
+                  <button type="button" onClick={handleSaveAccountPreferences} className="sc-btn sc-btn-primary sc-account-btn" disabled={savingAccount}>
+                    {savingAccount ? 'Saving...' : 'Save Account Preferences'}
+                  </button>
+                  {accountSaveStatus && <span className="sc-status">{accountSaveStatus}</span>}
                   {consumerData && (
                     <button 
                       type="button" 

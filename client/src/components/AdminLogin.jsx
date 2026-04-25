@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
 import Logo from '../assets/Logo.jpg';
 
 // Icons with inline styles (no Tailwind classes)
@@ -403,6 +405,7 @@ const getResponsiveStyles = (screenWidth, isTouchDevice = false) => {
 };
 
 const AdminLogin = () => {
+  const navigate = useNavigate();
   const [adminId, setAdminId] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -427,14 +430,45 @@ const AdminLogin = () => {
       setError('Please enter valid credentials.');
       return;
     }
+
     setLoading(true);
-    // TODO: Integrate with backend/Firebase authentication here
-    // Never store plain passwords; always hash/encrypt before sending
-    setTimeout(() => {
-      setLoading(false);
-      // Simulate error for demo
-      setError('Invalid credentials. Please try again.');
-    }, 1500);
+    const apiBase = import.meta.env.VITE_API_BASE_URL
+      || (import.meta.env.DEV ? 'http://localhost:5000' : 'https://powerpulseproo-api.onrender.com');
+    const API_BASE_URL = `${apiBase.replace(/\/$/, '')}/api`;
+
+    axios.post(`${API_BASE_URL}/auth/admin/login`, {
+      adminId: adminId.trim(),
+      password
+    })
+      .then((response) => {
+        if (response.data.status === 'success') {
+          localStorage.removeItem('user');
+          localStorage.removeItem('consumerToken');
+          localStorage.removeItem('consumerProfile');
+          localStorage.setItem('token', response.data.data.token);
+          localStorage.setItem('authToken', response.data.data.token);
+          localStorage.setItem('adminToken', response.data.data.token);
+          localStorage.setItem('adminProfile', JSON.stringify(response.data.data.admin));
+          localStorage.setItem('admin', JSON.stringify(response.data.data.admin));
+          setError('');
+          navigate('/admin-dashboard');
+        } else {
+          setError('Invalid credentials. Please try again.');
+        }
+      })
+      .catch((loginError) => {
+        console.error('Admin login error:', loginError);
+        if (loginError.response?.data?.message) {
+          setError(loginError.response.data.message);
+        } else if (loginError.code === 'ECONNREFUSED') {
+          setError('Unable to connect to server. Please make sure the backend is running.');
+        } else {
+          setError('Login failed. Please try again.');
+        }
+      })
+      .finally(() => {
+        setLoading(false);
+      });
   };
 
   return (
