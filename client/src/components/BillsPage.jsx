@@ -2,10 +2,9 @@
 // Self-contained, Tailwind-style inline CSS, backend billing API integration
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import { useNavigate } from 'react-router-dom';
+import { getApiBaseUrl } from '../services/api';
 
-const apiBase = (import.meta.env.VITE_API_BASE_URL
-  || (import.meta.env.DEV ? 'http://localhost:5000' : 'https://powerpulseproo-api.onrender.com'))
-  .replace(/\/$/, '');
+const apiBase = getApiBaseUrl();
 
 function getAuthToken() {
   const decodeJwtPayload = (token) => {

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { subscribeEvents, subscribeReadings } from '../firebase';
 import { useNavigate } from 'react-router-dom';
 import Logo from '../assets/Logo.jpg';
+import { getApiBaseUrl } from '../services/api';
 
 // Inline CSS (mirrors theme + font from other pages)
 const EVENTS_CSS = `
@@ -218,9 +219,7 @@ export default function EventsAlerts(){
 		return ()=> window.removeEventListener('device-config-updated', handler);
 	},[]);
 
-	const API_BASE = (import.meta.env.VITE_API_BASE_URL
-		|| (import.meta.env.DEV ? 'http://localhost:5000' : 'https://powerpulseproo-api.onrender.com'))
-		.replace(/\/$/, '');
+	const API_BASE = getApiBaseUrl();
 	const SHOW_DIAGNOSTICS = import.meta.env.VITE_SHOW_EVENT_DIAGNOSTICS === 'true';
 	const SHOW_LIVE_TOGGLE = import.meta.env.VITE_SHOW_LIVE_TOGGLE === 'true';
 	const SHOW_ACK_SELECTED = import.meta.env.VITE_SHOW_ACK_SELECTED === 'true';

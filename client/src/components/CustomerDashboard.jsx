@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { subscribeReadings, subscribeEvents, readingToUsage } from '../firebase';
 import { useNavigate, useParams } from 'react-router-dom';
 import Logo from '../assets/Logo.jpg';
+import { getApiBaseUrl } from '../services/api';
 
 // Icons
 const VoltageIcon = () => (
@@ -378,9 +379,7 @@ const CustomerDashboard = ({ adminView = false }) => {
   }, [consumerLabel, isMobile]);
   useEffect(() => {
     if (adminView) {
-      const apiBase = (import.meta.env.VITE_API_BASE_URL
-        || (import.meta.env.DEV ? 'http://localhost:5000' : 'https://powerpulseproo-api.onrender.com'))
-        .replace(/\/$/, '');
+      const apiBase = getApiBaseUrl();
 
       const getToken = () => localStorage.getItem('adminToken') || localStorage.getItem('token') || localStorage.getItem('authToken');
 

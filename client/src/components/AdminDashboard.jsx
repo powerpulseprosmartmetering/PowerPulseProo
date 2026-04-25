@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Logo from '../assets/Logo.jpg';
+import { getApiBaseUrl } from '../services/api';
 
 // Icons with the same styling as CustomerDashboard
 const SearchIcon = () => (
@@ -242,9 +243,7 @@ export default function AdminDashboard() {
   const [showConfirmation, setShowConfirmation] = useState(null); // { title, message, onConfirm }
   const [notification, setNotification] = useState(null); // { type, message }
 
-  const apiBase = (import.meta.env.VITE_API_BASE_URL
-    || (import.meta.env.DEV ? 'http://localhost:5000' : 'https://powerpulseproo-api.onrender.com'))
-    .replace(/\/$/, '');
+  const apiBase = getApiBaseUrl();
 
   const getAuthToken = () => localStorage.getItem('adminToken') || localStorage.getItem('token') || localStorage.getItem('authToken');
 

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import Logo from '../assets/Logo.jpg';
+import { getApiBaseUrl } from '../services/api';
 
 const SETTINGS_CSS = `
 :root { --sc-font: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif; --sc-primary:#ea580c; --sc-bg:#fef7f0; --sc-bg-mid:#f0f9ff; --sc-bg-end:#ecfeff; --sc-surface:#fff; --sc-border:#e2e8f0; --sc-text:#111827; --sc-text-dim:#64748b; }
@@ -100,9 +101,7 @@ export default function SettingsConfig() {
   const [accountSaveStatus, setAccountSaveStatus] = useState('');
   const [savingAccount, setSavingAccount] = useState(false);
   const deviceId = 'PPPRO-001';
-  const apiBase = (import.meta.env.VITE_API_BASE_URL
-    || (import.meta.env.DEV ? 'http://localhost:5000' : 'https://powerpulseproo-api.onrender.com'))
-    .replace(/\/$/, '');
+  const apiBase = getApiBaseUrl();
 
   const syncAccountFromConsumer = (data) => {
     if (!data) return;

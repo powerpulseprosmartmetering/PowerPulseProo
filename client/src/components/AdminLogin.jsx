@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import Logo from '../assets/Logo.jpg';
+import { getApiUrl } from '../services/api';
 
 // Icons with inline styles (no Tailwind classes)
 const UserIcon = () => (
@@ -432,9 +433,7 @@ const AdminLogin = () => {
     }
 
     setLoading(true);
-    const apiBase = import.meta.env.VITE_API_BASE_URL
-      || (import.meta.env.DEV ? 'http://localhost:5000' : 'https://powerpulseproo-api.onrender.com');
-    const API_BASE_URL = `${apiBase.replace(/\/$/, '')}/api`;
+    const API_BASE_URL = getApiUrl();
 
     axios.post(`${API_BASE_URL}/auth/admin/login`, {
       adminId: adminId.trim(),
