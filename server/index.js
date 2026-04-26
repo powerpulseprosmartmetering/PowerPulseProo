@@ -59,6 +59,7 @@ const defaultDevOrigins = [
 const defaultProdOrigins = [
   'https://powerpulsepro-api.onrender.com',
   'https://powerpulseproo-api.onrender.com',
+  'https://powerpulseproo-backend.onrender.com',
   'https://powerpulseproo.onrender.com',
   'https://powerpulseproo-1.onrender.com'
 ];
