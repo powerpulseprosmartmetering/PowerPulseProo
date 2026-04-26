@@ -59,7 +59,8 @@ const defaultDevOrigins = [
 const defaultProdOrigins = [
   'https://powerpulsepro-api.onrender.com',
   'https://powerpulseproo-api.onrender.com',
-  'https://powerpulseproo.onrender.com'
+  'https://powerpulseproo.onrender.com',
+  'https://powerpulseproo-1.onrender.com'
 ];
 const allowedOrigins = Array.from(new Set([...configuredClientUrls, ...defaultProdOrigins, ...defaultDevOrigins]));
 
@@ -68,10 +69,14 @@ const isDevLocalOrigin = (origin) => {
   return /^https?:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
 };
 
+const isAllowedRenderOrigin = (origin) => /^https:\/\/powerpulseproo(?:-[a-z0-9]+)?\.onrender\.com$/.test(origin)
+  || /^https:\/\/powerpulsepro-api(?:-[a-z0-9]+)?\.onrender\.com$/.test(origin)
+  || /^https:\/\/powerpulseproo-api(?:-[a-z0-9]+)?\.onrender\.com$/.test(origin);
+
 app.use(cors({
   origin: (origin, callback) => {
     // Allow non-browser clients and approved web origins.
-    if (!origin || allowedOrigins.includes(origin) || isDevLocalOrigin(origin)) {
+    if (!origin || allowedOrigins.includes(origin) || isDevLocalOrigin(origin) || isAllowedRenderOrigin(origin)) {
       return callback(null, true);
     }
 
