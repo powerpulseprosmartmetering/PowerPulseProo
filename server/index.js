@@ -56,7 +56,11 @@ const defaultDevOrigins = [
   'http://localhost:5174',
   'http://127.0.0.1:5174'
 ];
-const allowedOrigins = Array.from(new Set([...configuredClientUrls, ...defaultDevOrigins]));
+const defaultProdOrigins = [
+  'https://powerpulseproo-api.onrender.com',
+  'https://powerpulseproo.onrender.com'
+];
+const allowedOrigins = Array.from(new Set([...configuredClientUrls, ...defaultProdOrigins, ...defaultDevOrigins]));
 
 const isDevLocalOrigin = (origin) => {
   if (process.env.NODE_ENV === 'production') return false;
