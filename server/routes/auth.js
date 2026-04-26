@@ -1,5 +1,6 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 const { body, validationResult } = require('express-validator');
 const Consumer = require('../models/Consumer');
 const Admin = require('../models/Admin');
@@ -95,6 +96,13 @@ router.post('/consumer/login', [
   body('password').notEmpty().withMessage('Password is required')
 ], async (req, res) => {
   try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        status: 'error',
+        message: 'Database connection is not available. Please try again shortly.'
+      });
+    }
+
     // Check for validation errors
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -158,6 +166,18 @@ router.post('/consumer/login', [
   } catch (error) {
     console.error('❌ Consumer login error:', error);
     console.error('Full error stack:', error.stack);
+
+    const dbUnavailable =
+      error?.name === 'MongooseServerSelectionError'
+      || /buffering timed out|ECONNREFUSED|ENOTFOUND/i.test(error?.message || '');
+
+    if (dbUnavailable) {
+      return res.status(503).json({
+        status: 'error',
+        message: 'Database connection is not available. Please try again shortly.'
+      });
+    }
+
     res.status(500).json({
       status: 'error',
       message: 'Internal server error during login'
@@ -171,6 +191,13 @@ router.post('/admin/login', [
   body('password').notEmpty().withMessage('Password is required')
 ], async (req, res) => {
   try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        status: 'error',
+        message: 'Database connection is not available. Please try again shortly.'
+      });
+    }
+
     // Check for validation errors
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -242,6 +269,18 @@ router.post('/admin/login', [
 
   } catch (error) {
     console.error('Admin login error:', error);
+
+    const dbUnavailable =
+      error?.name === 'MongooseServerSelectionError'
+      || /buffering timed out|ECONNREFUSED|ENOTFOUND/i.test(error?.message || '');
+
+    if (dbUnavailable) {
+      return res.status(503).json({
+        status: 'error',
+        message: 'Database connection is not available. Please try again shortly.'
+      });
+    }
+
     res.status(500).json({
       status: 'error',
       message: 'Internal server error during login'
