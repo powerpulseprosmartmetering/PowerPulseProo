@@ -1,5 +1,5 @@
 const DEFAULT_DEV_API_BASE = 'http://localhost:5000';
-const DEFAULT_PROD_API_BASE = 'https://powerpulseproo-api.onrender.com';
+const DEFAULT_PROD_API_BASE = 'https://powerpulseproo.onrender.com';
 
 function inferBackendBaseFromFrontendHost(hostname) {
   if (!hostname || typeof hostname !== 'string') return null;
