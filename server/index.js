@@ -57,6 +57,7 @@ const defaultDevOrigins = [
   'http://127.0.0.1:5174'
 ];
 const defaultProdOrigins = [
+  'https://powerpulsepro-api.onrender.com',
   'https://powerpulseproo-api.onrender.com',
   'https://powerpulseproo.onrender.com'
 ];
