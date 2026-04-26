@@ -5,10 +5,11 @@ const Consumer = require('../models/Consumer');
 const Admin = require('../models/Admin');
 
 const router = express.Router();
+const JWT_SECRET = process.env.JWT_SECRET || 'powerpulsepro-fallback-secret-change-in-production';
 
 // Generate JWT token
 const generateToken = (payload) => {
-  return jwt.sign(payload, process.env.JWT_SECRET, {
+  return jwt.sign(payload, JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d'
   });
 };
@@ -268,7 +269,7 @@ router.get('/verify-token', async (req, res) => {
       });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET);
     
     let user;
     if (decoded.type === 'consumer') {
