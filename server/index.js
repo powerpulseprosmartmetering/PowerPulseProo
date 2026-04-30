@@ -91,7 +91,7 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // MongoDB connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb:mongodb+srv://powerpulseprosmartmetering_db_user:powerpulseprosmartmetering_db_user@powerpulsepro.bsmvihg.mongodb.net/?appName=PowerPulsePro')
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://powerpulseprosmartmetering_db_user:powerpulseprosmartmetering_db_user@powerpulsepro.bsmvihg.mongodb.net/?appName=PowerPulsePro')
   .then(async () => {
     console.log('🚀 MongoDB connected successfully');
 
