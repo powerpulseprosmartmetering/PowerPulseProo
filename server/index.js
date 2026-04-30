@@ -91,12 +91,8 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // ✅ Connect MongoDB
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log("🚀 MongoDB connected successfully"))
-  .catch(err => console.log("❌ MongoDB connection error:", err));
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/powerpulsepro') .then(async () => { console.log('🚀 MongoDB connected successfully');
 
-
-});
     // Seed a default super admin if none exists (development convenience)
     try {
       const adminCount = await Admin.countDocuments();
