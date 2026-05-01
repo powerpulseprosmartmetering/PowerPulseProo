@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import { authAPI, setAdminToken, getApiUrl } from '../services/api';
 import Logo from '../assets/Logo.jpg';
-import { getApiUrl } from '../services/api';
 
 // Icons with inline styles (no Tailwind classes)
 const UserIcon = () => (
@@ -424,7 +423,7 @@ const AdminLogin = () => {
   const isFormValid = isAdminIdValid && isPasswordValid;
 
   // Handle form submit
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     if (!isFormValid) {
@@ -433,41 +432,37 @@ const AdminLogin = () => {
     }
 
     setLoading(true);
-    const API_BASE_URL = getApiUrl();
 
-    axios.post(`${API_BASE_URL}/auth/admin/login`, {
-      adminId: adminId.trim(),
-      password
-    })
-      .then((response) => {
-        if (response.data.status === 'success') {
-          localStorage.removeItem('user');
-          localStorage.removeItem('consumerToken');
-          localStorage.removeItem('consumerProfile');
-          localStorage.setItem('token', response.data.data.token);
-          localStorage.setItem('authToken', response.data.data.token);
-          localStorage.setItem('adminToken', response.data.data.token);
-          localStorage.setItem('adminProfile', JSON.stringify(response.data.data.admin));
-          localStorage.setItem('admin', JSON.stringify(response.data.data.admin));
-          setError('');
-          navigate('/admin-dashboard');
-        } else {
-          setError('Invalid credentials. Please try again.');
-        }
-      })
-      .catch((loginError) => {
-        console.error('Admin login error:', loginError);
-        if (loginError.response?.data?.message) {
-          setError(loginError.response.data.message);
-        } else if (loginError.code === 'ECONNREFUSED') {
-          setError('Unable to connect to server. Please make sure the backend is running.');
-        } else {
-          setError('Login failed. Please try again.');
-        }
-      })
-      .finally(() => {
-        setLoading(false);
-      });
+    try {
+      // Login request using standardized API
+      const response = await authAPI.adminLogin(adminId.trim(), password);
+      
+      if (response.data.status === 'success') {
+        // Store token and profile using standardized functions
+        setAdminToken(response.data.data.token);
+        localStorage.setItem('adminProfile', JSON.stringify(response.data.data.admin));
+        setError('');
+        navigate('/admin-dashboard');
+      }
+    } catch (loginError) {
+      console.error('❌ Admin login error:', loginError);
+      
+      if (loginError.response?.data?.message) {
+        setError(loginError.response.data.message);
+      } else if (loginError.code === 'ECONNREFUSED' || loginError.message === 'Network Error') {
+        setError('Unable to connect to server. Please ensure the backend is running.');
+      } else if (loginError.response?.status === 401) {
+        setError('Invalid admin username or password.');
+      } else if (loginError.response?.status === 423) {
+        setError('Account is locked due to too many login attempts. Please try again later.');
+      } else if (loginError.response?.status === 403) {
+        setError('Your account is not active. Please contact the system administrator.');
+      } else {
+        setError('Login failed. Please try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (

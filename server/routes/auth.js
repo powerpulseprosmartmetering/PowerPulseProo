@@ -68,7 +68,9 @@ router.post('/consumer/register', [
     // Generate JWT token
     const token = generateToken({
       id: consumer._id,
+      email: consumer.email,
       consumerNumber: consumer.consumerNumber,
+      role: 'consumer',
       type: 'consumer'
     });
 
@@ -149,7 +151,9 @@ router.post('/consumer/login', [
     console.log('🔐 Generating token for consumer:', consumer.consumerNumber);
     const token = generateToken({
       id: consumer._id,
+      email: consumer.email,
       consumerNumber: consumer.consumerNumber,
+      role: 'consumer',
       type: 'consumer'
     });
     console.log('✅ Token generated successfully');
@@ -252,6 +256,7 @@ router.post('/admin/login', [
     // Generate JWT token
     const token = generateToken({
       id: admin._id,
+      email: admin.email,
       adminId: admin.adminId,
       role: admin.role,
       permissions: admin.permissions,

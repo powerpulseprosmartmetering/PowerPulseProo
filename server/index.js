@@ -91,7 +91,14 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // ✅ Connect MongoDB
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/powerpulsepro') .then(async () => { console.log('🚀 MongoDB connected successfully');
+// Get MongoDB URI from environment or use local development default
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/powerpulsepro';
+
+mongoose.connect(MONGODB_URI)
+  .then(async () => {
+    console.log('🚀 MongoDB connected successfully');
+    console.log(`📊 Connected to database: ${MONGODB_URI.split('/').pop()}`);
+
 
     // Seed a default super admin if none exists (development convenience)
     try {

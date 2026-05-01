@@ -2,40 +2,9 @@
 // Self-contained, Tailwind-style inline CSS, backend billing API integration
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import { useNavigate } from 'react-router-dom';
-import { getApiBaseUrl } from '../services/api';
+import { getApiBaseUrl, consumerAPI, getConsumerToken } from '../services/api';
 
 const apiBase = getApiBaseUrl();
-
-function getAuthToken() {
-  const decodeJwtPayload = (token) => {
-    try {
-      if (!token || typeof token !== 'string') return null;
-      const part = token.split('.')[1];
-      if (!part) return null;
-      const normalized = part.replace(/-/g, '+').replace(/_/g, '/');
-      const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
-      const json = atob(padded);
-      return JSON.parse(json);
-    } catch {
-      return null;
-    }
-  };
-
-  const candidates = [
-    localStorage.getItem('consumerToken'),
-    localStorage.getItem('token'),
-    localStorage.getItem('authToken')
-  ].filter(Boolean);
-
-  for (const token of candidates) {
-    const payload = decodeJwtPayload(token);
-    if (payload?.type === 'consumer') {
-      return token;
-    }
-  }
-
-  return null;
-}
 
 // --- Mock Data & Configs (Daily usage data for the currently selected month) ---
 const deviceId = "PPPRO-001";
@@ -200,7 +169,7 @@ export default function BillsPage() {
   }, []);
 
   useEffect(() => {
-    const token = getAuthToken();
+    const token = getConsumerToken();
     if (!token) {
       setHistoryLoading(false);
       setHistoryMessage('Please sign in to view billing history.');
@@ -222,38 +191,26 @@ export default function BillsPage() {
       setHistoryMessage('');
 
       try {
+        // Fetch profile and billing history in parallel using new API
         const [profileResponse, historyResponse] = await Promise.all([
-          fetch(`${apiBase}/api/consumer/profile`, {
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${token}`,
-              'Cache-Control': 'no-cache'
-            }
-          }),
-          fetch(`${apiBase}/api/consumer/billing/history?limit=12&month=${encodeURIComponent(selectedMonth)}`, {
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${token}`,
-              'Cache-Control': 'no-cache'
-            }
-          })
+          consumerAPI.getProfile(),
+          consumerAPI.getBillingHistory({ limit: 12, month: selectedMonth })
         ]);
 
-        const [profilePayload, historyPayload] = await Promise.all([
-          profileResponse.json(),
-          historyResponse.json()
-        ]);
+        const profilePayload = profileResponse.data;
+        const historyPayload = historyResponse.data;
 
-        if (profileResponse.ok && profilePayload?.status === 'success') {
+        // Update consumer profile
+        if (profilePayload?.status === 'success') {
           const freshProfile = profilePayload?.data?.consumer || null;
           if (freshProfile && isMounted) {
             setConsumerProfile(freshProfile);
             localStorage.setItem('consumerProfile', JSON.stringify(freshProfile));
-            localStorage.setItem('user', JSON.stringify(freshProfile));
           }
         }
 
-        if (!historyResponse.ok || historyPayload?.status !== 'success') {
+        // Process billing history
+        if (historyPayload?.status !== 'success') {
           throw new Error(historyPayload?.message || 'Failed to load billing history');
         }
 
@@ -291,36 +248,35 @@ export default function BillsPage() {
         }
 
         if (!hasAutoSelectedMonthRef.current && history.length > 0 && history.every((bill) => bill?.synthetic)) {
-          const broadResponse = await fetch(`${apiBase}/api/consumer/billing/history?limit=12`, {
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${token}`,
-              'Cache-Control': 'no-cache'
+          try {
+            const broadResponse = await consumerAPI.getBillingHistory({ limit: 12 });
+            const broadPayload = broadResponse.data;
+            if (broadPayload?.status === 'success') {
+              const broadBills = broadPayload?.data?.bills || [];
+              const broadLatestRealBill = broadBills.find((bill) => !bill?.synthetic && bill?.readingPeriod?.billingCycle);
+              if (broadLatestRealBill?.readingPeriod?.billingCycle) {
+                hasAutoSelectedMonthRef.current = true;
+                try {
+                  localStorage.setItem('billingSelectedMonth', broadLatestRealBill.readingPeriod.billingCycle);
+                } catch {}
+                setSelectedMonth(broadLatestRealBill.readingPeriod.billingCycle);
+                setHistoryMessage('');
+                return;
+              }
             }
-          });
-          const broadPayload = await broadResponse.json();
-          if (broadResponse.ok && broadPayload?.status === 'success') {
-            const broadBills = broadPayload?.data?.bills || [];
-            const broadLatestRealBill = broadBills.find((bill) => !bill?.synthetic && bill?.readingPeriod?.billingCycle);
-            if (broadLatestRealBill?.readingPeriod?.billingCycle) {
-              hasAutoSelectedMonthRef.current = true;
-              try {
-                localStorage.setItem('billingSelectedMonth', broadLatestRealBill.readingPeriod.billingCycle);
-              } catch {}
-              setSelectedMonth(broadLatestRealBill.readingPeriod.billingCycle);
-              setHistoryMessage('');
-              return;
-            }
+          } catch (err) {
+            console.warn('Failed to fetch broad billing history:', err);
           }
         }
 
         setHistoryMessage(history.length ? '' : 'No billing records found.');
       } catch (error) {
         if (!isMounted) return;
-        console.error('Error fetching billing history:', error);
+        console.error('❌ Error fetching billing history:', error);
         setBillingHistory([]);
-        setHistoryMessage(error.message || 'Failed to load billing history.');
-        setToast({ type: 'error', msg: 'Failed to load billing history.' });
+        const errorMessage = error.response?.data?.message || error.message || 'Failed to load billing history.';
+        setHistoryMessage(errorMessage);
+        setToast({ type: 'error', msg: errorMessage });
       } finally {
         if (isMounted) {
           setHistoryLoading(false);

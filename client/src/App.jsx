@@ -1,5 +1,6 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { getConsumerToken, getAdminToken } from './services/api';
 import HomepageStyled from './components/HomepageStyled';
 import ConsumerLogin from './components/ConsumerLogin';
 import CustomerDashboard from './components/CustomerDashboard';
@@ -11,94 +12,29 @@ import BillsPage from './components/BillsPage';
 import EventsAlerts from './components/EventsAlerts';
 import SettingsConfig from './components/SettingsConfig';
 
-const decodeJwtPayload = (token) => {
+/**
+ * Get stored profile from localStorage
+ */
+const getStoredProfile = (role) => {
+  const key = role === 'consumer' ? 'consumerProfile' : 'adminProfile';
+  const raw = localStorage.getItem(key);
+
+  if (!raw) return null;
+
   try {
-    if (!token || typeof token !== 'string') return null;
-
-    const part = token.split('.')[1];
-    if (!part) return null;
-
-    const normalized = part.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
-
-    return JSON.parse(atob(padded));
+    return JSON.parse(raw);
   } catch {
+    localStorage.removeItem(key);
     return null;
   }
 };
 
-const isTokenExpired = (token) => {
-  const payload = decodeJwtPayload(token);
-
-  if (!payload?.exp) return false;
-
-  return Date.now() >= payload.exp * 1000;
-};
-
-const getTokenByType = (expectedType) => {
-  const keys =
-    expectedType === 'consumer'
-      ? ['consumerToken', 'token', 'authToken']
-      : ['adminToken', 'token', 'authToken'];
-
-  for (const key of keys) {
-    const token = localStorage.getItem(key);
-
-    if (!token) continue;
-
-    if (
-      token === 'null' ||
-      token === 'undefined' ||
-      token.trim() === ''
-    ) {
-      continue;
-    }
-
-    if (isTokenExpired(token)) {
-      localStorage.removeItem(key);
-      continue;
-    }
-
-    const payload = decodeJwtPayload(token);
-
-    if (
-      payload?.type === expectedType ||
-      payload?.role === expectedType ||
-      (expectedType === 'admin' &&
-        ['admin', 'super-admin'].includes(payload?.role))
-    ) {
-      return token;
-    }
-  }
-
-  return null;
-};
-
-const getStoredProfile = (role) => {
-  const keys =
-    role === 'consumer'
-      ? ['consumerProfile', 'user']
-      : ['adminProfile', 'admin'];
-
-  for (const key of keys) {
-    const raw = localStorage.getItem(key);
-
-    if (!raw) continue;
-
-    try {
-      return JSON.parse(raw);
-    } catch {
-      localStorage.removeItem(key);
-    }
-  }
-
-  return null;
-};
-
-/* ---------------- Consumer Protected Route ---------------- */
-
+/**
+ * Consumer Protected Route
+ * Only allows access if valid consumerToken exists
+ */
 const ProtectedRoute = ({ children }) => {
-  const token = getTokenByType('consumer');
+  const token = getConsumerToken();
   const consumer = getStoredProfile('consumer');
 
   if (!token || !consumer) {
@@ -108,15 +44,20 @@ const ProtectedRoute = ({ children }) => {
   return children;
 };
 
-/* ---------------- Admin Protected Route ---------------- */
-
+/**
+ * Admin Protected Route
+ * Only allows access if valid adminToken exists
+ */
 const AdminProtectedRoute = ({ children }) => {
-  const token = getTokenByType('admin');
+  const token = getAdminToken();
   const admin = getStoredProfile('admin');
 
   if (!token || !admin) {
     return <Navigate to="/admin-login" replace />;
   }
+
+  return children;
+};
 
   return children;
 };

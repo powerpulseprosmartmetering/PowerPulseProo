@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import { authAPI, setConsumerToken, getApiUrl } from '../services/api';
 import Logo from '../assets/Logo.jpg';
-import { getApiUrl } from '../services/api';
 
 // Icons with inline styles (no Tailwind classes)
 const UserIcon = () => (
@@ -436,24 +435,13 @@ const ConsumerLogin = () => {
     setLoading(true);
     
     try {
-      const API_BASE_URL = getApiUrl();
-      
-      // Login request with consumer number
-      const loginResponse = await axios.post(`${API_BASE_URL}/auth/consumer/login`, {
-        consumerNumber: consumerId,
-        password: password
-      });
+      // Login request using standardized API
+      const response = await authAPI.consumerLogin(consumerId, password);
 
-      if (loginResponse.data.status === 'success') {
-        // Store token in localStorage
-        localStorage.removeItem('admin');
-        localStorage.removeItem('adminToken');
-        localStorage.removeItem('adminProfile');
-        localStorage.setItem('token', loginResponse.data.data.token);
-        localStorage.setItem('authToken', loginResponse.data.data.token);
-        localStorage.setItem('consumerToken', loginResponse.data.data.token);
-        localStorage.setItem('consumerProfile', JSON.stringify(loginResponse.data.data.consumer));
-        localStorage.setItem('user', JSON.stringify(loginResponse.data.data.consumer));
+      if (response.data.status === 'success') {
+        // Store token and profile using standardized functions
+        setConsumerToken(response.data.data.token);
+        localStorage.setItem('consumerProfile', JSON.stringify(response.data.data.consumer));
         
         // Clear any previous errors
         setError('');
@@ -462,12 +450,16 @@ const ConsumerLogin = () => {
         navigate('/consumer-dashboard');
       }
     } catch (error) {
-      console.error('Login error:', error);
+      console.error('❌ Login error:', error);
       
       if (error.response?.data?.message) {
         setError(error.response.data.message);
-      } else if (error.code === 'ECONNREFUSED') {
-        setError('Unable to connect to server. Please make sure the backend is running.');
+      } else if (error.code === 'ECONNREFUSED' || error.message === 'Network Error') {
+        setError('Unable to connect to server. Please ensure the backend is running.');
+      } else if (error.response?.status === 401) {
+        setError('Invalid consumer number or password.');
+      } else if (error.response?.status === 403) {
+        setError('Your account is not active. Please contact support.');
       } else {
         setError('Login failed. Please try again.');
       }
