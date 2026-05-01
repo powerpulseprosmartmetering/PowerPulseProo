@@ -2,6 +2,8 @@ const jwt = require('jsonwebtoken');
 const Consumer = require('../models/Consumer');
 const Admin = require('../models/Admin');
 
+const JWT_SECRET = process.env.JWT_SECRET || 'powerpulsepro-fallback-secret-change-in-production';
+
 // Verify JWT token and authenticate user
 const authenticate = async (req, res, next) => {
   try {
@@ -14,7 +16,7 @@ const authenticate = async (req, res, next) => {
       });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET);
     
     let user;
     if (decoded.type === 'consumer') {
