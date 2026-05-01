@@ -59,9 +59,6 @@ const AdminProtectedRoute = ({ children }) => {
   return children;
 };
 
-  return children;
-};
-
 function App() {
   return (
     <BrowserRouter>
