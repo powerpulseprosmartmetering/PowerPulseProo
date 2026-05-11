@@ -58,8 +58,33 @@ async function syncFirebaseReadingsForConsumer({ consumer, limit = 5000 }) {
 		throw new Error(`Failed to fetch Firebase readings (${firebaseRes.status})`);
 	}
 
-	const tree = await firebaseRes.json();
-	const flatReadings = flattenReadingsTree(tree).slice(-Math.max(1, Math.min(50000, Number(limit) || 5000)));
+		const tree = await firebaseRes.json();
+
+		// Support two possible Firebase structures:
+		// 1) Readings/YYYY-MM-DD/HH/TIMESTAMP => top-level keys are dates (no meterId level)
+		// 2) Readings/METER_ID/YYYY-MM-DD/HH/TIMESTAMP => top-level keys are meter IDs
+		let flatReadings = [];
+		const keys = Object.keys(tree || {});
+		const firstKey = keys.length ? keys[0] : null;
+
+		const looksLikeDate = (k) => /^\d{4}-\d{1,2}-\d{1,2}$/.test(String(k));
+
+		if (firstKey && looksLikeDate(firstKey)) {
+			// Date-rooted structure
+			flatReadings = flattenReadingsTree(tree);
+		} else {
+			// MeterId-rooted structure: iterate each meter subtree and attach meterId
+			for (const [maybeMeterId, subtree] of Object.entries(tree || {})) {
+				if (!subtree || typeof subtree !== 'object') continue;
+				const items = flattenReadingsTree(subtree);
+				for (const it of items) {
+					it.meterId = maybeMeterId;
+				}
+				flatReadings.push(...items);
+			}
+		}
+
+		flatReadings = flatReadings.slice(-Math.max(1, Math.min(50000, Number(limit) || 5000)));
 
 	if (!flatReadings.length) {
 		return {
@@ -71,6 +96,11 @@ async function syncFirebaseReadingsForConsumer({ consumer, limit = 5000 }) {
 	}
 
 	const meterId = consumer?.meterDetails?.meterId || 'PPPRO-001';
+
+	// If the flattened readings include explicit meterId values, filter to this consumer's meterId
+	if (flatReadings.length && flatReadings[0].meterId) {
+		flatReadings = flatReadings.filter(r => String(r.meterId) === String(meterId));
+	}
 	let imported = 0;
 	let skipped = 0;
 	let syntheticCurrentReading = 0;
