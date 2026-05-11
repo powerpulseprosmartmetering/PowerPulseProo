@@ -12,7 +12,7 @@ import axios from 'axios';
 // ========== BASE URL CONFIGURATION ==========
 
 const DEFAULT_DEV_API_BASE = 'http://localhost:5000';
-const DEFAULT_PROD_API_BASE = 'https://powerpulseproo-backend.onrender.com';
+const DEFAULT_PROD_API_BASE = 'https://powerpulsepro-api.onrender.com';
 
 /**
  * Infer backend base URL from frontend hostname
